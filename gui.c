@@ -42,6 +42,21 @@
 #include "gba_memory.h"
 #include "serial.h"
 #include "nspire_frameskip.h"
+#include "savestate.h"
+#endif
+
+#if defined(NSPIRE_LIBRETRO)
+/* Top byte of word [26] global / [15] per-game: new frameskip encoding (auto/manual/off). */
+#define GPSP_CFG_FS_V2_MARK 0xFF000000u
+#define GPSP_GAME_FS_V2_MARK 0xFF000000u
+
+static void nspire_clamp_rom_buffer_size(void)
+{
+  if (nspire_rom_buffer_size_choice < 2)
+    nspire_rom_buffer_size_choice = 2;
+  else if (nspire_rom_buffer_size_choice > 32)
+    nspire_rom_buffer_size_choice = 32;
+}
 #endif
 
 #define MAX_PATH 1024
@@ -875,7 +890,19 @@ s32 load_game_config_file()
       u32 file_options[16];
 
       file_read_array(game_config_file, file_options);
-      current_frameskip_type = (frameskip_type)(file_options[0] % 4);
+      {
+        u32 r0 = file_options[0];
+        u32 r15 = file_options[15];
+        if ((r15 & GPSP_GAME_FS_V2_MARK) == GPSP_GAME_FS_V2_MARK)
+          current_frameskip_type = (frameskip_type)(r0 % 3);
+        else
+        {
+          static const frameskip_type om[] = {
+            no_frameskip, auto_frameskip, auto_frameskip, manual_frameskip
+          };
+          current_frameskip_type = om[r0 % 4];
+        }
+      }
       frameskip_value = file_options[1];
       random_skip = file_options[2] % 2;
       clock_speed = file_options[3];
@@ -885,8 +912,10 @@ s32 load_game_config_file()
       if (clock_speed < 33)
         clock_speed = 33;
 
-      if (frameskip_value > 30)
-        frameskip_value = 30;
+      if (frameskip_value > 99)
+        frameskip_value = 99;
+      if (frameskip_value < 1 && current_frameskip_type == auto_frameskip)
+        frameskip_value = 4;
 
       for (i = 0; i < 10; i++)
       {
@@ -895,12 +924,6 @@ s32 load_game_config_file()
       }
 
       quick_save_slot = file_options[14];
-      frameskip_threshold = file_options[15] & 0xFF;
-      frameskip_interval = (file_options[15] >> 8) & 0xFF;
-      if (frameskip_threshold > 100)
-        frameskip_threshold = 100;
-      if (frameskip_interval > 30)
-        frameskip_interval = 30;
 
       file_loaded = 1;
     }
@@ -914,18 +937,13 @@ s32 load_game_config_file()
         if (old_type == 2)
           current_frameskip_type = no_frameskip;
         else if (old_type == 1)
-        {
-          current_frameskip_type = fixed_interval_frameskip;
-          frameskip_interval = file_options[1];
-          if (frameskip_interval > 30)
-            frameskip_interval = 30;
-        }
+          current_frameskip_type = manual_frameskip;
         else
           current_frameskip_type = auto_frameskip;
       }
       frameskip_value = file_options[1];
-      if (frameskip_value > 30)
-        frameskip_value = 30;
+      if (frameskip_value > 99)
+        frameskip_value = 99;
       if (frameskip_value < 1 && current_frameskip_type == auto_frameskip)
         frameskip_value = 4;
 
@@ -944,9 +962,6 @@ s32 load_game_config_file()
       }
 
       quick_save_slot = file_options[14];
-      frameskip_threshold = 33;
-      if (current_frameskip_type != fixed_interval_frameskip)
-        frameskip_interval = 1;
 
       file_loaded = 1;
     }
@@ -1003,19 +1018,17 @@ s32 load_game_config_file()
     return 0;
 
 #if defined(NSPIRE_LIBRETRO)
-  nspire_bios_choice = 1;
-  current_frameskip_type = no_frameskip;
-  frameskip_value = 4;
-  frameskip_threshold = 33;
-  frameskip_interval = 1;
+  current_frameskip_type = manual_frameskip;
+  frameskip_value = 2;
+  random_skip = 0;
 #else
   current_frameskip_type = auto_frameskip;
   frameskip_value = 4;
 #ifdef WIZ_BUILD
   frameskip_value = 1;
 #endif
-#endif
   random_skip = 0;
+#endif
   clock_speed = default_clock_speed;
 
   for(i = 0; i < 10; i++)
@@ -1043,15 +1056,23 @@ s32 load_config_file()
   {
     u32 file_size = file_length(config_path, config_file);
 
-    // Sanity check: File size must be the right size (96 = +BIOS on NSPIRE_LIBRETRO)
+    // Sanity check: file sizes by feature growth:
+    // 96 = +BIOS, 112 = +frameskip, 124 = +emulator options, 128 = +ROM buffer size.
     if(file_size == 92
 #if defined(NSPIRE_LIBRETRO)
      || file_size == 96
+     || file_size == 112
+     || file_size == 124
+     || file_size == 128
 #endif
      )
     {
       u32 words = file_size / 4;
-      u32 file_options[24];
+#if defined(NSPIRE_LIBRETRO)
+      u32 file_options[32];
+#else
+      u32 file_options[28];
+#endif
       u32 i;
       s32 menu_button = -1;
 
@@ -1114,6 +1135,40 @@ s32 load_config_file()
         nspire_bios_choice = file_options[23] % 2;
       else
         nspire_bios_choice = 1;
+
+      if (words >= 28)
+      {
+        u32 r24 = file_options[24];
+        u32 r26 = file_options[26];
+        if ((r26 & GPSP_CFG_FS_V2_MARK) == GPSP_CFG_FS_V2_MARK)
+          current_frameskip_type = (frameskip_type)(r24 % 3);
+        else
+        {
+          static const frameskip_type om[] = {
+            no_frameskip, auto_frameskip, auto_frameskip, manual_frameskip
+          };
+          current_frameskip_type = om[r24 % 4];
+        }
+        frameskip_value = file_options[25];
+        if (frameskip_value > 99)
+          frameskip_value = 99;
+        if (frameskip_value < 1 && current_frameskip_type == auto_frameskip)
+          frameskip_value = 4;
+        random_skip = file_options[27] % 2;
+      }
+
+      if (words >= 31)
+      {
+        nspire_sprlim_choice = file_options[28] % 2;
+        nspire_rtc_choice = file_options[29] % 3;
+        nspire_frame_mix_choice = file_options[30] % 2;
+      }
+      if (words >= 32)
+        nspire_rom_buffer_size_choice = file_options[31];
+      else
+        nspire_rom_buffer_size_choice = 8;
+      nspire_clamp_rom_buffer_size();
+      nspire_emulator_options_apply();
 #endif
 
       file_close(config_file);
@@ -1143,7 +1198,7 @@ s32 save_game_config_file()
 #if defined(NSPIRE_LIBRETRO)
     u32 file_options[16];
 
-    file_options[0] = (u32)current_frameskip_type % 4;
+    file_options[0] = (u32)current_frameskip_type % 3;
     file_options[1] = frameskip_value;
     file_options[2] = random_skip;
     file_options[3] = clock_speed;
@@ -1154,7 +1209,7 @@ s32 save_game_config_file()
     }
 
     file_options[14] = quick_save_slot;
-    file_options[15] = (frameskip_threshold & 0xFF) | ((frameskip_interval & 0xFF) << 8);
+    file_options[15] = GPSP_GAME_FS_V2_MARK;
 
     file_write(game_config_file, file_options, sizeof(file_options));
 #else
@@ -1200,7 +1255,7 @@ s32 save_config_file()
   if(file_check_valid(config_file))
   {
 #if defined(NSPIRE_LIBRETRO)
-    u32 file_options[24];
+    u32 file_options[32];
 #else
     u32 file_options[23];
 #endif
@@ -1222,8 +1277,17 @@ s32 save_config_file()
 #endif
 
 #if defined(NSPIRE_LIBRETRO)
+    nspire_clamp_rom_buffer_size();
     file_options[23] = nspire_bios_choice % 2;
-    file_write(config_file, file_options, sizeof(file_options));
+    file_options[24] = (u32)current_frameskip_type % 3;
+    file_options[25] = frameskip_value;
+    file_options[26] = GPSP_CFG_FS_V2_MARK;
+    file_options[27] = random_skip % 2;
+    file_options[28] = nspire_sprlim_choice % 2;
+    file_options[29] = nspire_rtc_choice % 3;
+    file_options[30] = nspire_frame_mix_choice % 2;
+    file_options[31] = nspire_rom_buffer_size_choice;
+    file_write(config_file, file_options, 32 * sizeof(u32));
 #else
     file_write_array(config_file, file_options);
 #endif
@@ -1249,6 +1313,33 @@ u32 savestate_slot = 0;
 
 void get_savestate_snapshot(u8 *savestate_filename)
 {
+#ifdef NSPIRE_BUILD
+  /* Host save files are raw BSON blobs (GBA_STATE_MEM_SIZE), not snapshot+time. */
+  FILE *fp = fopen((char *)savestate_filename, "rb");
+  long sz;
+
+  if (!fp)
+  {
+    print_string("No savestate in this slot.          ", COLOR_HELP_TEXT,
+     COLOR_BG, 10, 40);
+    return;
+  }
+  fseek(fp, 0, SEEK_END);
+  sz = ftell(fp);
+  fclose(fp);
+#if defined(NSPIRE_LIBRETRO)
+  if (sz == (long)GBA_STATE_MEM_SIZE)
+    print_string("Savestate present in this slot.     ", COLOR_HELP_TEXT,
+     COLOR_BG, 10, 40);
+  else
+    print_string("No valid savestate (wrong size).    ", COLOR_HELP_TEXT,
+     COLOR_BG, 10, 40);
+#else
+  (void)sz;
+  print_string("(savestate slot)                    ", COLOR_HELP_TEXT,
+   COLOR_BG, 10, 40);
+#endif
+#else
   static u16 snapshot_buffer[240 * 160];
   u8 savestate_timestamp_string[80];
 
@@ -1290,6 +1381,7 @@ void get_savestate_snapshot(u8 *savestate_filename)
 
 #if !defined(GP2X_BUILD) && !defined(NSPIRE_BUILD)
   blit_to_screen(snapshot_buffer, 240, 160, 230, 40);
+#endif
 #endif
 }
 
@@ -1451,24 +1543,20 @@ u32 menu(u16 *original_screen)
   void menu_load()
   {
 #ifdef NSPIRE_BUILD
-	u8 *file_ext[] = { ".gba.tns", ".zip.tns", NULL };
+	u8 *file_ext[] = { ".gba.tns", NULL };
 #else
 	u8 *file_ext[] = { ".gba", ".bin", ".zip", NULL };
 #endif
     u8 load_filename[512];
     save_game_config_file();
 #if defined(NSPIRE_LIBRETRO)
-    if (nspire_apply_bios() != 0)
-    {
-      nspire_bios_error_wait("gba_bios.bin.tns missing or invalid.");
-      choose_menu(current_menu);
-      return;
-    }
+    nspire_apply_bios();
 #endif
     if(load_file(file_ext, load_filename) != -1)
     {
 #if defined(NSPIRE_LIBRETRO)
-       if(load_gamepak(NULL, load_filename, FEAT_AUTODETECT, FEAT_AUTODETECT, SERIAL_MODE_AUTO) != 0)
+       if(load_gamepak(NULL, load_filename, nspire_rtc_force_value(), FEAT_AUTODETECT,
+                       SERIAL_MODE_AUTO) != 0)
 #else
        if(load_gamepak(load_filename) == -1)
 #endif
@@ -1478,6 +1566,7 @@ u32 menu(u16 *original_screen)
        reset_gba();
 #if defined(NSPIRE_LIBRETRO)
        nspire_frameskip_reset();
+       nspire_load_cartridge_backup();
 #endif
 #ifdef NSPIRE_BUILD
        //change_ext(gamepak_filename, load_filename, ".qsv.tns");
@@ -1487,8 +1576,8 @@ u32 menu(u16 *original_screen)
 		{
 			u8 current_savestate_filename[512];
 			get_savestate_filename_noshot(quick_save_slot - 1, current_savestate_filename);
-			load_state(current_savestate_filename);
-			quick_save_slot = 0;
+			if (load_state(current_savestate_filename))
+			  quick_save_slot = 0;
 		}
 #endif
        return_value = 1;
@@ -1512,11 +1601,7 @@ u32 menu(u16 *original_screen)
     if(!first_load)
     {
 #if defined(NSPIRE_LIBRETRO)
-      if (nspire_apply_bios() != 0)
-      {
-        nspire_bios_error_wait("gba_bios.bin.tns missing or invalid.");
-        return;
-      }
+      nspire_apply_bios();
 #endif
       reset_gba();
 #if defined(NSPIRE_LIBRETRO)
@@ -1551,9 +1636,14 @@ u32 menu(u16 *original_screen)
   {
     if(!first_load)
     {
-      load_state(current_savestate_filename);
-      return_value = 1;
-      repeat = 0;
+      if (load_state(current_savestate_filename))
+      {
+        return_value = 1;
+        repeat = 0;
+#if defined(NSPIRE_LIBRETRO)
+        nspire_frameskip_reset();
+#endif
+      }
     }
   }
 
@@ -1567,9 +1657,14 @@ u32 menu(u16 *original_screen)
     u8 load_filename[512];
     if(load_file(file_ext, load_filename) != -1)
     {
-      load_state(load_filename);
-      return_value = 1;
-      repeat = 0;
+      if (load_state(load_filename))
+      {
+        return_value = 1;
+        repeat = 0;
+#if defined(NSPIRE_LIBRETRO)
+        nspire_frameskip_reset();
+#endif
+      }
     }
     else
     {
@@ -1618,6 +1713,17 @@ u32 menu(u16 *original_screen)
     menu_change_state();
   }
 
+  void submenu_about()
+  {
+    print_string("gpsp-libretro for nSpire (Alpha v0.2)", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 10);
+    print_string("by andymcca", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 20);
+    print_string("Credits:", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 90);
+    print_string("Exophase", COLOR_INACTIVE_ITEM, COLOR_BG, 10, 100);
+    print_string("David G.F.", COLOR_INACTIVE_ITEM, COLOR_BG, 10, 110);
+    print_string("calc84maniac", COLOR_INACTIVE_ITEM, COLOR_BG, 10, 120);
+    print_string("Vogtinator", COLOR_INACTIVE_ITEM, COLOR_BG, 10, 130);
+  }
+
   void submenu_main()
   {
     if (*gamepak_filename)
@@ -1633,20 +1739,15 @@ u32 menu(u16 *original_screen)
 	}
 	else
 	{
-		print_string("gpsp-libretro for nspire (Alpha v0.1)",
+		print_string("gpsp-libretro for nspire (Alpha v0.2)",
 		 COLOR_ACTIVE_ITEM, COLOR_BG, 10, 10);
-		print_string("by andymcca", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 20);
 	}
   }
 
   u8 *yes_no_options[] = { "no", "yes" };
   u8 *enable_disable_options[] = { "disabled", "enabled" };
 
-#if defined(NSPIRE_LIBRETRO)
-  u8 *frameskip_options_lr[] = {
-    "disabled", "auto", "auto (threshold)", "fixed interval"
-  };
-#else
+#if !defined(GP2X_BUILD)
   u8 *frameskip_options[] = { "automatic", "manual", "off" };
 #endif
   u8 *frameskip_variation_options[] = { "uniform", "random" };
@@ -1656,6 +1757,9 @@ u32 menu(u16 *original_screen)
     "Built-in BIOS",
     "gba_bios.bin.tns (official)"
   };
+  u8 *nspire_sprlim_options[] = { "disabled", "enabled" };
+  u8 *nspire_rtc_options[] = { "auto", "enabled", "disabled" };
+  u8 *nspire_frame_mix_options[] = { "disabled", "enabled" };
 #endif
 
 #ifndef PSP_BUILD
@@ -1723,26 +1827,20 @@ u32 menu(u16 *original_screen)
      "smooth image, at the cost of being blurry and having less vibrant\n"
      "colors.", 3),
 #endif
-#if defined(NSPIRE_LIBRETRO)
-    string_selection_option(NULL, "Frameskip", frameskip_options_lr,
-     (u32 *)(&current_frameskip_type), 4,
-     "Same modes as RetroArch gpSP core. Disabled: full FPS. Auto: wall-clock\n"
-     "catch-up (no audio buffer API on Nspire). Auto (threshold): tuning via %.\n"
-     "Fixed interval: omit N frames after each drawn frame (0 = none).", 5),
-    numeric_selection_option(NULL, "Max auto skips", &frameskip_value, 31,
-     "Auto / auto (threshold): max consecutive skipped frames (1-30).", 6),
-    numeric_selection_option(NULL, "Threshold %", &frameskip_threshold, 101,
-     "Auto (threshold) only: higher % allows more consecutive skips.", 7),
-    numeric_selection_option(NULL, "Fixed interval", &frameskip_interval, 31,
-     "Fixed interval only: frames to skip after each draw (0-30; RetroArch 0-10).",
-     8),
-    string_selection_option(NULL, "Framskip variation",
-     frameskip_variation_options, &random_skip, 2,
-     "Fixed interval only: uniform vs random pattern (legacy gpSP).", 9),
-#else
+#if defined(NSPIRE_BUILD)
     string_selection_option(NULL, "Frameskip type", frameskip_options,
      (u32 *)(&current_frameskip_type), 3,
-#if !defined(GP2X_BUILD) && !defined(NSPIRE_BUILD)
+     "Off: no frameskip. Auto: skip when ahead of the LCD (original gpSP).\n"
+     "Manual: draw 1 of every N+1 frames.", 5),
+    numeric_selection_option(NULL, "Frameskip value", &frameskip_value, 100,
+     "Auto: max consecutive skips. Manual: N skipped per N+1 frames.", 6),
+    string_selection_option(NULL, "Frameskip variation",
+     frameskip_variation_options, &random_skip, 2,
+     "Random timing for manual skip can reduce flicker beat with manual.", 7),
+#elif !defined(GP2X_BUILD)
+    string_selection_option(NULL, "Frameskip type", frameskip_options,
+     (u32 *)(&current_frameskip_type), 3,
+#if !defined(NSPIRE_BUILD)
      "Determines what kind of frameskipping to use.\n"
      "Frameskipping may improve emulation speed of many games.\n"
 #endif
@@ -1751,16 +1849,16 @@ u32 menu(u16 *original_screen)
      "Manual: Always render only 1 out of N + 1 frames."
      , 5),
     numeric_selection_option(NULL, "Frameskip value", &frameskip_value, 100,
-#if !defined(GP2X_BUILD) && !defined(NSPIRE_BUILD)
+#if !defined(NSPIRE_BUILD)
      "For auto frameskip, determines the maximum number of frames that\n"
      "are allowed to be skipped consecutively.\n"
      "For manual frameskip, determines the number of frames that will\n"
      "always be skipped."
 #endif
      "", 6),
-    string_selection_option(NULL, "Framskip variation",
+    string_selection_option(NULL, "Frameskip variation",
      frameskip_variation_options, &random_skip, 2,
-#if !defined(GP2X_BUILD) && !defined(NSPIRE_BUILD)
+#if !defined(NSPIRE_BUILD)
      "If objects in the game flicker at a regular rate certain manual\n"
      "frameskip values may cause them to normally disappear. Change this\n"
      "value to 'random' to avoid this. Do not use otherwise, as it tends to\n"
@@ -1864,18 +1962,42 @@ u32 menu(u16 *original_screen)
 
   make_menu(savestate, submenu_savestate, NULL);
 
+  menu_option_type about_options[] =
+  {
+    submenu_option(NULL, "Back", "Return to the main menu.", 13)
+  };
+
+  make_menu(about, submenu_about, NULL);
+
 #if defined(NSPIRE_LIBRETRO)
   void submenu_emulator()
   {
+    nspire_emulator_options_apply();
   }
 
   menu_option_type emulator_options[] =
   {
+    numeric_selection_option(nspire_clamp_rom_buffer_size, "ROM buffer size (MiB)",
+     &nspire_rom_buffer_size_choice, 33,
+     "Runtime ROM page cache target in MiB.\n"
+     "Valid range is 2..32. Lower values reduce RAM use but increase swapping.", 2),
     string_selection_option(NULL, "GBA BIOS source", bios_source_options,
      &nspire_bios_choice, 2,
      "Built-in: open replacement BIOS in the core. File: place\n"
      "gba_bios.bin.tns next to this program (official Nintendo dump).\n"
-     "Applies when you load or restart a game.", 2),
+     "Applies when you load or restart a game.", 3),
+    string_selection_option(NULL, "No sprite limit", nspire_sprlim_options,
+     &nspire_sprlim_choice, 2,
+     "Matches RetroArch gpsp_sprlim: disabled = 128 sprite cap;\n"
+     "enabled = draw all sprites (may be slower).", 4),
+    string_selection_option(NULL, "RTC", nspire_rtc_options,
+     &nspire_rtc_choice, 3,
+     "Real-time clock override (gpsp_rtc). Auto uses game database.\n"
+     "Takes effect the next time a game is loaded from disk.", 5),
+    string_selection_option(NULL, "Interframe blending", nspire_frame_mix_options,
+     &nspire_frame_mix_choice, 2,
+     "gpsp_frame_mixing: blends this frame with the previous one\n"
+     "(LCD-style ghosting).", 6),
     submenu_option(NULL, "Back", "Return to the main menu.", 12)
   };
 
@@ -1979,7 +2101,7 @@ u32 menu(u16 *original_screen)
      "frameskip behavior.", 0),
 #if defined(NSPIRE_LIBRETRO)
 	submenu_option(&emulator_menu, "Emulator options",
-     "BIOS source: built-in or official file.", 4),
+     "BIOS, sprite limit, RTC, and interframe blending.", 1),
 #endif
 #else
     submenu_option(&graphics_sound_menu, "Graphics and Sound options",
@@ -1990,19 +2112,19 @@ u32 menu(u16 *original_screen)
      "Load state from slot", &savestate_slot, 10,
      "Select to load the game state from the current slot\n"
      "for this game, if it exists.\n"
-     "Press left + right to change the current slot.", 2),
+     "Press left + right to change the current slot.", 3),
     numeric_selection_action_option(menu_save_state, NULL,
      "Save state to slot", &savestate_slot, 10,
      "Select to save the game state to the current slot\n"
      "for this game. See the extended menu for more info.\n"
-     "Press left + right to change the current slot.", 3),
+     "Press left + right to change the current slot.", 4),
 #if !defined(NSPIRE_BUILD)
     submenu_option(&savestate_menu, "Savestate options",
      "Select to enter a menu for loading, saving, and\n"
      "viewing the currently active savestate for this game\n"
      "(or to load a savestate file from another game)", 4),
 #endif
-	submenu_option(&gamepad_config_menu, "Configure gamepad input",
+	submenu_option(&gamepad_config_menu, "Configure input",
      "Select to change the in-game behavior of buttons\n"
      "and d-pad.", 6),
 #if !defined(GP2X_BUILD) && !defined(NSPIRE_BUILD)
@@ -2011,7 +2133,9 @@ u32 menu(u16 *original_screen)
 #endif
     submenu_option(&cheats_misc_menu, "Cheats and Miscellaneous options",
      "Select to manage cheats, set backup behavior,\n"
-     "and set device clock speed.", 9),
+     "and set device clock speed.", 8),
+    submenu_option(&about_menu, "About",
+     "View credits and acknowledgements.", 10),
     action_option(menu_load, NULL, "Load new game",
      "Select to load a new game\n"
      "(will exit a game if currently playing).", 11),
@@ -2049,6 +2173,62 @@ u32 menu(u16 *original_screen)
     for(i = 0; i < 6; i++)
     {
       print_string_pad(" ", COLOR_BG, COLOR_BG, 8, 210 + (i * 10), 70);
+    }
+  }
+
+  void print_help_wrapped(const char *text)
+  {
+    const u32 max_lines = 6;
+    const u32 max_cols = 50;
+    u32 line_index = 0;
+    const char *p = text ? text : "";
+
+    while (*p && line_index < max_lines)
+    {
+      const char *start = p;
+      u32 len = 0;
+      s32 last_space = -1;
+      char line_buffer_local[96];
+
+      if (*p == '\n')
+      {
+        line_index++;
+        p++;
+        continue;
+      }
+
+      while (p[len] && p[len] != '\n' && len < max_cols)
+      {
+        if (p[len] == ' ')
+          last_space = (s32)len;
+        len++;
+      }
+
+      if (p[len] && p[len] != '\n' && len == max_cols && last_space >= 0)
+      {
+        len = (u32)last_space;
+      }
+
+      while (len && start[len - 1] == ' ')
+        len--;
+
+      memcpy(line_buffer_local, start, len);
+      line_buffer_local[len] = 0;
+      print_string_pad(line_buffer_local, COLOR_HELP_TEXT, COLOR_BG, 8,
+       210 + (line_index * 10), 70);
+      line_index++;
+
+      p = start + len;
+      while (*p == ' ')
+        p++;
+      if (*p == '\n')
+        p++;
+    }
+
+    while (line_index < max_lines)
+    {
+      print_string_pad(" ", COLOR_BG, COLOR_BG, 8, 210 + (line_index * 10), 70);
+      line_index++;
     }
   }
   
@@ -2129,8 +2309,7 @@ u32 menu(u16 *original_screen)
       }
     }
 
-    print_string(current_option->help_string, COLOR_HELP_TEXT,
-     COLOR_BG, 8, 210);
+    print_help_wrapped(current_option->help_string);
 
     flip_screen();
 #ifdef NSPIRE_BUILD

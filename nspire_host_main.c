@@ -19,27 +19,62 @@
 #include <string.h>
 #include <unistd.h>
 
+#if defined(NSPIRE_LIBRETRO)
+static void nspire_sync_bios_menu_from_disk(void)
+{
+  char path[512];
+  FILE *fp;
+  long sz;
+  unsigned char b;
+
+  sprintf(path, "%s/gba_bios.bin.tns", main_path);
+
+  fp = fopen(path, "rb");
+  if (!fp)
+  {
+    nspire_bios_choice = 0;
+    return;
+  }
+  if (fread(&b, 1, 1, fp) != 1)
+  {
+    fclose(fp);
+    nspire_bios_choice = 0;
+    return;
+  }
+  if (b != 0x18U)
+  {
+    fclose(fp);
+    nspire_bios_choice = 0;
+    return;
+  }
+  fseek(fp, 0, SEEK_END);
+  sz = ftell(fp);
+  fclose(fp);
+  if (sz < 0x4000L)
+  {
+    nspire_bios_choice = 0;
+    return;
+  }
+  nspire_bios_choice = 1;
+}
+#endif
+
 extern void init_gamepak_buffer(void);
 extern void nspire_present_frame(u32 skip_next_frame);
 
 extern uint32_t not_crt0_savedsp;
 extern u32 quick_save_slot;
 
-frameskip_type current_frameskip_type = no_frameskip;
-u32 frameskip_value = 4;
-u32 frameskip_threshold = 33;
-u32 frameskip_interval = 1;
+frameskip_type current_frameskip_type = manual_frameskip;
+u32 frameskip_value = 2;
 u32 random_skip = 0;
 
-u8 *file_ext[] = {(u8 *)".gba.tns", (u8 *)".zip.tns", NULL};
+u8 *file_ext[] = {(u8 *)".gba.tns", NULL};
 
 u32 update_backup_flag = 1;
 u32 synchronize_flag = 1;
 s32 relative_frame_count = 0;
 u32 clock_speed = 132;
-
-void update_backup(void) {}
-void update_backup_force(void) {}
 
 void set_clock_speed(void) {}
 
@@ -114,35 +149,38 @@ static void save_romdir(void)
   }
 }
 
-void load_state(u8 *filename)
+int load_state(u8 *filename)
 {
   FILE *f;
   u8 *buf;
 
   if (!filename)
-    return;
+    return 0;
   f = fopen((char *)filename, "rb");
   if (!f)
-    return;
+    return 0;
   buf = (u8 *)malloc(GBA_STATE_MEM_SIZE);
   if (!buf)
   {
     fclose(f);
-    return;
+    return 0;
   }
   if (fread(buf, 1, GBA_STATE_MEM_SIZE, f) != GBA_STATE_MEM_SIZE)
   {
     free(buf);
     fclose(f);
-    return;
+    return 0;
   }
   fclose(f);
   if (gba_load_state(buf))
   {
     instruction_count = 0;
     reg[OAM_UPDATED] = 1;
+    free(buf);
+    return 1;
   }
   free(buf);
+  return 0;
 }
 
 void save_state(u8 *filename, u16 *screen_capture)
@@ -153,6 +191,10 @@ void save_state(u8 *filename, u16 *screen_capture)
   (void)screen_capture;
   if (!filename)
     return;
+#ifdef HAVE_DYNAREC
+  if (dynarec_enable)
+    flush_dynarec_caches();
+#endif
   buf = (u8 *)malloc(GBA_STATE_MEM_SIZE);
   if (!buf)
     return;
@@ -169,6 +211,7 @@ void save_state(u8 *filename, u16 *screen_capture)
 void quit(void)
 {
   save_romdir();
+  update_backup_force();
   memory_term();
   nspire_restore();
   exit(0);
@@ -218,15 +261,12 @@ int nspire_apply_bios(void)
   {
     char path[512];
 
-#if (defined(PSP_BUILD) || defined(ARM_ARCH)) && !defined(_WIN32_WCE)
     sprintf(path, "%s/gba_bios.bin.tns", main_path);
-#else
-    sprintf(path, "%s\\gba_bios.bin.tns", main_path);
-#endif
-    if (load_bios(path) != 0)
-      return -1;
-    if (bios_rom[0] != 0x18U)
-      return -1;
+    if (load_bios(path) != 0 || bios_rom[0] != 0x18U)
+    {
+      memcpy(bios_rom, open_gba_bios_rom, sizeof(bios_rom));
+      nspire_bios_choice = 0;
+    }
     return 0;
   }
 }
@@ -297,6 +337,9 @@ int main(int argc, char *argv[])
   ChangeWorkingDirectory(argv[0]);
   getcwd(main_path, sizeof(main_path));
   load_config_file();
+#if defined(NSPIRE_LIBRETRO)
+  nspire_sync_bios_menu_from_disk();
+#endif
 
   gamepak_filename[0] = 0;
 
@@ -305,21 +348,18 @@ int main(int argc, char *argv[])
   init_video();
   video_resolution_large();
 
-  if (nspire_apply_bios() != 0)
-  {
-    nspire_bios_error_wait(
-     "BIOS: need valid gba_bios.bin.tns (or set Built-in in menu).");
-    quit();
-  }
+  nspire_apply_bios();
 
   init_input();
 
   if (argc > 1)
   {
-    if (load_gamepak(NULL, argv[1], FEAT_AUTODETECT, FEAT_AUTODETECT, SERIAL_MODE_AUTO) != 0)
+    if (load_gamepak(NULL, argv[1], nspire_rtc_force_value(), FEAT_AUTODETECT,
+                     SERIAL_MODE_AUTO) != 0)
       quit();
     reset_gba();
     nspire_frameskip_reset();
+    nspire_load_cartridge_backup();
     set_gba_resolution((video_scale_type)screen_scale);
     video_resolution_small();
   }
@@ -330,14 +370,15 @@ int main(int argc, char *argv[])
       menu(copy_screen());
     else
     {
-      if (load_gamepak(NULL, (char *)load_filename, FEAT_AUTODETECT, FEAT_AUTODETECT,
-                       SERIAL_MODE_AUTO) != 0)
+      if (load_gamepak(NULL, (char *)load_filename, nspire_rtc_force_value(),
+                       FEAT_AUTODETECT, SERIAL_MODE_AUTO) != 0)
         quit();
       set_clock_speed();
       set_gba_resolution((video_scale_type)screen_scale);
       video_resolution_small();
       reset_gba();
       nspire_frameskip_reset();
+      nspire_load_cartridge_backup();
     }
   }
 
@@ -345,8 +386,8 @@ int main(int argc, char *argv[])
   {
     u8 current_savestate_filename[512];
     get_savestate_filename_noshot(quick_save_slot - 1, current_savestate_filename);
-    load_state(current_savestate_filename);
-    quick_save_slot = 0;
+    if (load_state(current_savestate_filename))
+      quick_save_slot = 0;
   }
 
   emulation_loop();
