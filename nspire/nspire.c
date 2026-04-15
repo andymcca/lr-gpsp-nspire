@@ -95,6 +95,21 @@ int warm_cache_op_range(int op, void *addr, unsigned long size)
 	return -1;
 }
 
+void nspire_jit_cache_sync(void *base, void *end)
+{
+	unsigned long size;
+	char *b;
+	char *e;
+
+	if (!base || !end || end <= base)
+		return;
+	b = (char *)base;
+	e = (char *)end;
+	size = (unsigned long)(e - b);
+	warm_cache_op_range(WOP_D_CLEAN, b, size);
+	warm_cache_op_range(WOP_I_INVALIDATE, b, size);
+}
+
 unsigned months[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
 struct tm* localtime(const time_t* input_time)
