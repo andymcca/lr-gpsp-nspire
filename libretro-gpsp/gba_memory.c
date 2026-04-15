@@ -22,7 +22,7 @@
 
 #ifdef NSPIRE_LIBRETRO
 #include <strings.h>
-extern u32 load_file_zip(char *filename);
+extern u32 nspire_rom_buffer_size_choice;
 #endif
 
 /* Sound */
@@ -363,8 +363,6 @@ char gamepak_code[5];
 #ifdef NSPIRE_LIBRETRO
 u8 gamepak_title[13];
 u8 gamepak_maker[3];
-u8 gamepak_rom[ROM_BUFFER_SIZE * 1024u * 1024u];
-u32 gamepak_ram_buffer_size = sizeof(gamepak_rom);
 #endif
 // We allocate in 1MB chunks.
 const unsigned gamepak_buffer_blocksize = 1024*1024;
@@ -559,6 +557,9 @@ void function_cc write_eeprom(u32 unused_address, u32 value)
       {
         eeprom_counter = 0;
         eeprom_mode = EEPROM_WRITE_FOOTER_MODE;
+#ifdef NSPIRE_LIBRETRO
+        nspire_backup_mark_dirty();
+#endif
       }
       break;
 
@@ -1174,6 +1175,9 @@ void function_cc write_backup(u32 address, u32 value)
       gamepak_backup[address] = value;
     }
   }
+#ifdef NSPIRE_LIBRETRO
+  nspire_backup_mark_dirty();
+#endif
 }
 
 #define write_backup8()                                                       \
@@ -2224,9 +2228,19 @@ u8 *load_gamepak_page(u32 physical_index)
 void init_gamepak_buffer(void)
 {
   unsigned i;
+  u32 target_blocks = ROM_BUFFER_SIZE;
+
+#ifdef NSPIRE_LIBRETRO
+  if (nspire_rom_buffer_size_choice < 2)
+    nspire_rom_buffer_size_choice = 2;
+  else if (nspire_rom_buffer_size_choice > 32)
+    nspire_rom_buffer_size_choice = 32;
+  target_blocks = nspire_rom_buffer_size_choice;
+#endif
+
   // Try to allocate up to 32 blocks of 1MB each
   gamepak_buffer_count = 0;
-  while (gamepak_buffer_count < ROM_BUFFER_SIZE)
+  while (gamepak_buffer_count < target_blocks)
   {
     void *ptr = malloc(gamepak_buffer_blocksize);
     if (!ptr)
@@ -2242,7 +2256,10 @@ void init_gamepak_buffer(void)
   }
 
   gamepak_lru_head = 0;
-  gamepak_lru_tail = 32 * gamepak_buffer_count - 1;
+  if (gamepak_buffer_count == 0)
+    gamepak_lru_tail = 0;
+  else
+    gamepak_lru_tail = 32 * gamepak_buffer_count - 1;
 }
 
 bool gamepak_must_swap(void)
@@ -2509,65 +2526,14 @@ unsigned memory_write_savestate(u8 *dst)
   return (unsigned int)(dst - startp);
 }
 
-#ifdef NSPIRE_LIBRETRO
-static s32 load_gamepak_from_ram(const u8 *src, u32 raw_size)
+static s32 load_gamepak_raw(const char *name)
 {
   unsigned i, j;
-
-  if (raw_size > sizeof(gamepak_rom))
-    return -1;
-
-  gamepak_size = (raw_size + 0x7FFF) & ~0x7FFF;
-  {
-    u32 buf_blocks =
-        (gamepak_size + gamepak_buffer_blocksize - 1) / (gamepak_buffer_blocksize);
-    u32 rom_blocks = gamepak_size >> 15;
-    u32 ldblks =
-        buf_blocks < gamepak_buffer_count ? buf_blocks : gamepak_buffer_count;
-
-    map_null(read, 0x8000000, 0xD000000);
-
-    for (i = 0; i < ldblks; i++)
-    {
-      u32 off = i * gamepak_buffer_blocksize;
-      u32 n = gamepak_buffer_blocksize;
-
-      if (off >= raw_size)
-      {
-        memset(gamepak_buffers[i], 0xFF, gamepak_buffer_blocksize);
-      }
-      else
-      {
-        if (off + n > raw_size)
-          n = raw_size - off;
-        memcpy(gamepak_buffers[i], src + off, n);
-        if (n < gamepak_buffer_blocksize)
-          memset(gamepak_buffers[i] + n, 0xFF, gamepak_buffer_blocksize - n);
-      }
-
-      for (j = 0; j < 32 && i * 32u + j < rom_blocks; j++)
-      {
-        u32 phyn = i * 32 + j;
-        u8 *blkptr = &gamepak_buffers[i][32 * 1024 * j];
-        u32 entry = evict_gamepak_page();
-        gamepak_blk_queue[entry].phy_rom = (s16)phyn;
-        map_rom_entry(read, phyn, blkptr, rom_blocks);
-      }
-    }
-  }
-
   if (gamepak_file_large)
   {
     filestream_close(gamepak_file_large);
     gamepak_file_large = NULL;
   }
-  return 0;
-}
-#endif
-
-static s32 load_gamepak_raw(const char *name)
-{
-  unsigned i, j;
   gamepak_file_large = filestream_open(name, RETRO_VFS_FILE_ACCESS_READ,
                                        RETRO_VFS_FILE_ACCESS_HINT_NONE);
   if(gamepak_file_large)
@@ -2581,6 +2547,15 @@ static s32 load_gamepak_raw(const char *name)
     u32 rom_blocks = gamepak_size >> 15;
     u32 ldblks = buf_blocks < gamepak_buffer_count ?
                     buf_blocks : gamepak_buffer_count;
+
+#ifdef NSPIRE_LIBRETRO
+    if (ldblks == 0 && gamepak_size != 0)
+    {
+      filestream_close(gamepak_file_large);
+      gamepak_file_large = NULL;
+      return -1;
+    }
+#endif
 
     // Unmap the ROM space since we will re-map it now
     map_null(read, 0x8000000, 0xD000000);
@@ -2599,7 +2574,7 @@ static s32 load_gamepak_raw(const char *name)
         // Map it to the read handlers now
         map_rom_entry(read, phyn, blkptr, rom_blocks);
       }
-    } 
+    }
 
     return 0;
   }
@@ -2615,22 +2590,16 @@ u32 load_gamepak(const struct retro_game_info* info, const char *name,
    (void)info;
 
 #ifdef NSPIRE_LIBRETRO
+   if (gamepak_buffer_count == 0)
+      return -1;
+
    if (name)
    {
       size_t nl = strlen(name);
       int is_zip = (nl >= 8 && !strcasecmp(name + nl - 8, ".zip.tns"))
                 || (nl >= 4 && !strcasecmp(name + nl - 4, ".zip"));
       if (is_zip)
-      {
-         s32 zlen = (s32)load_file_zip((char *)name);
-         if (zlen < 0)
-            return -1;
-         if (load_gamepak_from_ram(gamepak_rom, (u32)zlen))
-            return -1;
-         strncpy(gamepak_filename, name, sizeof(gamepak_filename) - 1);
-         gamepak_filename[sizeof(gamepak_filename) - 1] = 0;
-         goto load_gamepak_loaded;
-      }
+         return -1;
    }
 #endif
 
@@ -2643,7 +2612,6 @@ u32 load_gamepak(const struct retro_game_info* info, const char *name,
       gamepak_filename[sizeof(gamepak_filename) - 1] = 0;
    }
 
-load_gamepak_loaded:
    // Buffer 0 always has the first 1MB chunk of the ROM
    memcpy(game_code,  &gamepak_buffers[0][0xAC],  4);
 

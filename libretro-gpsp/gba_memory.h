@@ -243,8 +243,6 @@ extern char gamepak_filename[512];
 #ifdef NSPIRE_LIBRETRO
 extern u8 gamepak_title[13];
 extern u8 gamepak_maker[3];
-extern u8 gamepak_rom[];
-extern u32 gamepak_ram_buffer_size;
 #endif
 
 cpu_alert_type dma_transfer(unsigned dma_chan, int *cycles);
@@ -307,9 +305,17 @@ extern u32 reg[64];
 #define FLASH_BANKSWITCH_MODE         4
 
 extern u32 backup_type;
+extern u32 backup_type_reset;
 extern u32 sram_bankcount;
+extern u32 flash_mode;
+extern u32 flash_command_position;
+extern u32 flash_bank_num;
 extern u32 flash_bank_cnt;
+extern u32 flash_device_id;
 extern u32 eeprom_size;
+extern u32 eeprom_mode;
+extern u32 eeprom_address;
+extern u32 eeprom_counter;
 
 extern u8 gamepak_backup[1024 * 128];
 
