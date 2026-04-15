@@ -23,7 +23,8 @@ void set_display_buffer(void* buffer);
 void update_at_vblank();
 
 int warm_cache_op_range(int op, void *addr, unsigned long size);
-void clean_dcache();
+void clean_dcache(void);
+void nspire_jit_cache_sync(void *base, void *end);
 
 struct tm* localtime(const time_t*);
 

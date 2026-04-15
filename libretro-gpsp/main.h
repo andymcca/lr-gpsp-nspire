@@ -47,10 +47,16 @@ typedef struct
 
 typedef enum
 {
+#ifdef NSPIRE_LIBRETRO
+  auto_frameskip = 0,
+  manual_frameskip,
+  no_frameskip
+#else
   no_frameskip = 0,
   auto_frameskip,
   auto_threshold_frameskip,
   fixed_interval_frameskip
+#endif
 } frameskip_type;
 
 typedef enum
@@ -93,11 +99,17 @@ void game_name_ext(char *src, char *buffer, char *extension);
 extern u32 clock_speed;
 extern frameskip_type current_frameskip_type;
 extern u32 frameskip_value;
-extern u32 frameskip_threshold;
-extern u32 frameskip_interval;
 extern u32 random_skip;
 /* 0 = built-in open BIOS, 1 = gba_bios.bin.tns next to executable */
 extern u32 nspire_bios_choice;
+/* Emulator options (see libretro core options of the same names). */
+extern u32 nspire_sprlim_choice;
+extern u32 nspire_rtc_choice;
+extern u32 nspire_frame_mix_choice;
+extern u32 nspire_rom_buffer_size_choice;
+void nspire_emulator_options_apply(void);
+void nspire_video_mix_reset(void);
+int nspire_rtc_force_value(void);
 int nspire_apply_bios(void);
 void nspire_bios_error_wait(const char *msg);
 void change_ext(u8 *src, u8 *buffer, u8 *extension);

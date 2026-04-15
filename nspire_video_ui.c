@@ -14,8 +14,8 @@ static u16 *screen_pixels;
 #define get_screen_pixels() (screen_pixels)
 #define get_screen_pitch()  ((u32)320)
 
-u32 screen_scale = scaled_aspect;
-u32 current_scale = scaled_aspect;
+u32 screen_scale = scaled_raw;
+u32 current_scale = scaled_raw;
 u32 screen_filter = filter_bilinear;
 
 u32 resolution_width = 320;

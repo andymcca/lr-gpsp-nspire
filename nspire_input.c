@@ -3,6 +3,8 @@
 #include "common.h"
 #include "input.h"
 #include "serial.h"
+#include "gba_memory.h"
+#include "gui.h"
 #include "nspire.h"
 #include "nspire_gui_video.h"
 
@@ -224,17 +226,25 @@ u32 update_input(void)
   if (getnewkey(gamepad_config_map[KEY_MAP_LOADSTATE]))
   {
     u8 current_savestate_filename[512];
+
+    if (!gamepak_filename[0])
+      return 0;
     get_savestate_filename_noshot(savestate_slot, current_savestate_filename);
-    load_state_wrapper(current_savestate_filename);
-    return 1;
+    /* Do not use load_state_wrapper: tiny not_crt0_savedsp stack overflows BSON path. */
+    if (load_state(current_savestate_filename))
+      return 1;
+    return 0;
   }
 
   if (getnewkey(gamepad_config_map[KEY_MAP_SAVESTATE]))
   {
     u8 current_savestate_filename[512];
     u16 *current_screen = copy_screen();
+
+    if (!gamepak_filename[0])
+      return 0;
     get_savestate_filename_noshot(savestate_slot, current_savestate_filename);
-    save_state_wrapper(current_savestate_filename, current_screen);
+    save_state(current_savestate_filename, current_screen);
     return 0;
   }
 
@@ -248,11 +258,15 @@ u32 update_input(void)
   {
     u8 current_savestate_filename[512];
     u16 *current_screen = copy_screen();
-    get_savestate_filename_noshot(savestate_slot, current_savestate_filename);
-    save_state_wrapper(current_savestate_filename, current_screen);
-    quick_save_slot = savestate_slot + 1;
-    save_config_file_wrapper();
-    quit_wrapper();
+
+    if (gamepak_filename[0])
+    {
+      get_savestate_filename_noshot(savestate_slot, current_savestate_filename);
+      save_state(current_savestate_filename, current_screen);
+      quick_save_slot = savestate_slot + 1;
+      save_config_file();
+    }
+    quit();
   }
 
   return 0;

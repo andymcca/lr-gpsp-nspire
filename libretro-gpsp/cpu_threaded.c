@@ -224,6 +224,10 @@ typedef struct
 
 /* Cache invalidation */
 
+#ifdef NSPIRE_LIBRETRO
+void nspire_jit_cache_sync(void *base, void *end);
+#endif
+
 #if defined(PSP)
   void platform_cache_sync(void *baseaddr, void *endptr) {
     sceKernelDcacheWritebackRange(baseaddr, ((char*)endptr) - ((char*)baseaddr));
@@ -242,6 +246,11 @@ typedef struct
   #include "3ds/3ds_utils.h"
   void platform_cache_sync(void *baseaddr, void *endptr) {
     ctr_flush_invalidate_cache();
+  }
+#elif defined(ARM_ARCH) && defined(NSPIRE_LIBRETRO)
+  void platform_cache_sync(void *baseaddr, void *endptr) {
+    if (baseaddr && endptr && endptr > baseaddr)
+      nspire_jit_cache_sync(baseaddr, endptr);
   }
 #elif defined(ARM_ARCH) || defined(ARM64_ARCH)
   void platform_cache_sync(void *baseaddr, void *endptr) {
@@ -3342,6 +3351,9 @@ void init_bios_hooks(void)
 
 void flush_translation_cache_ram(void)
 {
+#ifdef NSPIRE_LIBRETRO
+  u8 *ram_jit_hi = ram_translation_ptr;
+#endif
   /* Flushes RAM caches avoiding doing too much work (ie. wiping unused memory) */
   flush_ram_count++;
   /*printf("ram flush %d (pc %x), %x to %x, %x to %x\n",
@@ -3376,15 +3388,30 @@ void flush_translation_cache_ram(void)
   ewram_code_min = ~0U;
   ewram_code_max =  0U;
   ram_block_tag = INITIAL_TOP_TAG;
+#ifdef NSPIRE_LIBRETRO
+  /* Legacy gpSP invalidated the JIT buffer; I-cache may retain stale code. */
+  if (ram_jit_hi > ram_translation_cache)
+    nspire_jit_cache_sync(ram_translation_cache, ram_jit_hi);
+#endif
 }
 
 void flush_translation_cache_rom(void)
 {
+#ifdef NSPIRE_LIBRETRO
+  u8 *rom_jit_hi = rom_translation_ptr;
+#endif
   /* We flush the generated code except for everything below the watermark. */
   last_rom_translation_ptr = &rom_translation_cache[rom_cache_watermark];
   rom_translation_ptr      = &rom_translation_cache[rom_cache_watermark];
 
   memset(rom_branch_hash, 0, sizeof(rom_branch_hash));
+#ifdef NSPIRE_LIBRETRO
+  {
+    u8 *rom_jit_lo = &rom_translation_cache[rom_cache_watermark];
+    if (rom_jit_hi > rom_jit_lo)
+      nspire_jit_cache_sync(rom_jit_lo, rom_jit_hi);
+  }
+#endif
 }
 
 void init_dynarec_caches(void)
