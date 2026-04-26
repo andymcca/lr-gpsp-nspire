@@ -213,13 +213,18 @@ typedef u32 fixed8_24;
 
 #ifdef NSPIRE_LIBRETRO
 #include "../nspire/nspire.h"
-void load_state(u8 *filename);
+int load_state(u8 *filename);
 void save_state(u8 *filename, u16 *screen_capture);
 void quit(void);
 void update_backup(void);
 void update_backup_force(void);
+void nspire_backup_mark_dirty(void);
+void nspire_load_cartridge_backup(void);
+u32 load_backup(char *name);
+u32 save_backup(char *name);
 void set_clock_speed(void);
 extern u32 update_backup_flag;
+extern char backup_filename[512];
 extern u32 synchronize_flag;
 extern u32 frame_speed;
 extern s32 relative_frame_count;

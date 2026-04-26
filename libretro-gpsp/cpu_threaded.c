@@ -2497,15 +2497,19 @@ void translate_icache_sync() {
 // 0x0000 : this is just data (never translated)
 // 0x00XX : not used (since first byte is zero)
 // 0x0101 : this is code that is not the start of a translated block
-// 0xXXXX : this is the start of a translated block, starting from 0xFFFF downwards
+// 0xXXXX : this is the start of a translated block, high tags counting down by 2
 //          LSB is always set (we decrement by two) to ensure both bytes != 0
 //
 // The tag value is an index to a `ramtag_type` structure that sits at the end
-// of the RAM CACHE (grows like a stack). For simplicity we start tags at 0xFFFF
-// and grow like a stack.
+// of the RAM CACHE (grows like a stack).
+//
+// INITIAL_TOP_TAG must not be 0xFFFF: partial_flush_ram_inner's left scan treats
+// halfword 0xFFFF (SMC_TAG_UB16) as "stop without clearing". The first allocated
+// block used to get 0xFFFF, so an interior SMC flush left that header + stale
+// ramtag offsets (wrong tiles until something forced retranslate). Start at 0xFFFD.
 
 #define LAST_TAG_NUM       0x0101
-#define INITIAL_TOP_TAG    0xFFFF
+#define INITIAL_TOP_TAG    0xFFFD
 #define CODE_TAG_BLOCK16   0x0101
 #define CODE_TAG_BLOCK32   0x01010101
 
@@ -2585,7 +2589,7 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
         bool result;                                                          \
         u8 *blkptr = ram_translation_ptr + block_prologue_size;               \
         trentry->offset_##type = blkptr - ram_translation_cache;              \
-        result = translate_block_##type(pc, true);                            \
+        result = translate_block_##type(pc, true);                              \
                                                                               \
         if (result)                                                           \
           return blkptr;                                                      \
@@ -2688,7 +2692,6 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
   fflush(stdout);
   return NULL;
 }
-
 
 // Potential exit point: If the rd field is pc for instructions is 0x0F,
 // the instruction is b/bl/bx, or the instruction is ldm with PC in the
@@ -2900,6 +2903,58 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
 block_data_type block_data[MAX_BLOCK_SIZE];
 block_exit_type block_exits[MAX_EXITS];
 
+/* Small prefilter for translation gate membership checks.
+ * Keeps the common "not a gate" path branch-light on ARM9. */
+static u32 translation_gate_filter_lo;
+static u32 translation_gate_filter_hi;
+static u32 translation_gate_filter_count = (u32)-1;
+static u32 translation_gate_replace_rr;
+
+static inline u32 translation_gate_hash_lo(u32 pc)
+{
+  return (pc >> 2) & 31u;
+}
+
+static inline u32 translation_gate_hash_hi(u32 pc)
+{
+  return ((pc >> 7) ^ (pc >> 13) ^ (pc >> 2)) & 31u;
+}
+
+static void translation_gate_filter_rebuild(void)
+{
+  u32 i;
+  translation_gate_filter_lo = 0;
+  translation_gate_filter_hi = 0;
+  for (i = 0; i < translation_gate_targets; i++)
+  {
+    u32 pc = translation_gate_target_pc[i];
+    translation_gate_filter_lo |= 1u << translation_gate_hash_lo(pc);
+    translation_gate_filter_hi |= 1u << translation_gate_hash_hi(pc);
+  }
+  translation_gate_filter_count = translation_gate_targets;
+}
+
+static inline bool translation_gate_contains_pc(u32 pc)
+{
+  u32 i;
+  u32 lo_bit = 1u << translation_gate_hash_lo(pc);
+  u32 hi_bit = 1u << translation_gate_hash_hi(pc);
+
+  if (translation_gate_filter_count != translation_gate_targets)
+    translation_gate_filter_rebuild();
+
+  if (((translation_gate_filter_lo & lo_bit) == 0u) ||
+      ((translation_gate_filter_hi & hi_bit) == 0u))
+    return false;
+
+  for (i = 0; i < translation_gate_targets; i++)
+  {
+    if (translation_gate_target_pc[i] == pc)
+      return true;
+  }
+  return false;
+}
+
 #define smc_write_arm_yes() {                                                 \
   intptr_t offset = (pc < 0x03000000) ? 0x40000 : -0x8000;                    \
   if(address32(pc_address_block, (block_end_pc & 0x7FFF) + offset) == 0)      \
@@ -2982,11 +3037,8 @@ block_exit_type block_exits[MAX_EXITS];
       type##_set_condition(condition);                                        \
     }                                                                         \
                                                                               \
-    for(i = 0; i < translation_gate_targets; i++)                             \
-    {                                                                         \
-      if(block_end_pc == translation_gate_target_pc[i])                       \
-        goto block_end;                                                       \
-    }                                                                         \
+    if (translation_gate_contains_pc(block_end_pc))                           \
+      goto block_end;                                                         \
                                                                               \
     block_data[block_data_position].update_cycles = 0;                        \
     block_data_position++;                                                    \
@@ -3153,12 +3205,27 @@ bool translate_block_arm(u32 pc, bool ram_region)
     }
     else
     {
-      /* External branch, save for later */
-      external_block_exits[external_block_exit_position].branch_target =
-       branch_target;
-      external_block_exits[external_block_exit_position].branch_source =
-       block_exits[i].branch_source;
-      external_block_exit_position++;
+      /* Deferred patch list must match arm_emit.h: only PCs emitted as direct
+       * PC-relative branches get patched here. Partial: BIOS + cart ROM only.
+       * Classic: same plus IW/EW RAM (lookup never returns (u8*)~0 for these). */
+#if defined(NSPIRE_LIBRETRO)
+      if ((nspire_dynarec_ram_policy
+            && GPSP_PC_RELATIVE_TRANS_REGION(branch_target))
+          || (!nspire_dynarec_ram_policy
+              && (branch_target < 0x00004000u
+                  || (branch_target >= 0x08000000u
+                      && branch_target < 0x0E000000u))))
+#else
+      if (branch_target < 0x00004000u
+          || (branch_target >= 0x08000000u && branch_target < 0x0E000000u))
+#endif
+      {
+        external_block_exits[external_block_exit_position].branch_target =
+         branch_target;
+        external_block_exits[external_block_exit_position].branch_source =
+         block_exits[i].branch_source;
+        external_block_exit_position++;
+      }
     }
   }
 
@@ -3174,11 +3241,17 @@ bool translate_block_arm(u32 pc, bool ram_region)
       translation_target = bios_swi_entrypoint;
     else
       translation_target = block_lookup_translate_arm(branch_target);
+#if defined(NSPIRE_LIBRETRO)
+    if (GPSP_TRANSLATION_TARGET_INVALID(translation_target))
+      return false;
+#else
     if (!translation_target)
       return false;
+#endif
     generate_branch_patch_unconditional(
       external_block_exits[i].branch_source, translation_target);
   }
+
   return true;
 }
 
@@ -3310,12 +3383,24 @@ bool translate_block_thumb(u32 pc, bool ram_region)
     }
     else
     {
-      /* External branch, save for later */
-      external_block_exits[external_block_exit_position].branch_target =
-       branch_target;
-      external_block_exits[external_block_exit_position].branch_source =
-       block_exits[i].branch_source;
-      external_block_exit_position++;
+#if defined(NSPIRE_LIBRETRO)
+      if ((nspire_dynarec_ram_policy
+            && GPSP_PC_RELATIVE_TRANS_REGION(branch_target))
+          || (!nspire_dynarec_ram_policy
+              && (branch_target < 0x00004000u
+                  || (branch_target >= 0x08000000u
+                      && branch_target < 0x0E000000u))))
+#else
+      if (branch_target < 0x00004000u
+          || (branch_target >= 0x08000000u && branch_target < 0x0E000000u))
+#endif
+      {
+        external_block_exits[external_block_exit_position].branch_target =
+         branch_target;
+        external_block_exits[external_block_exit_position].branch_source =
+         block_exits[i].branch_source;
+        external_block_exit_position++;
+      }
     }
   }
 
@@ -3331,11 +3416,17 @@ bool translate_block_thumb(u32 pc, bool ram_region)
       translation_target = bios_swi_entrypoint;
     else
       translation_target = block_lookup_translate_thumb(branch_target);
+#if defined(NSPIRE_LIBRETRO)
+    if (GPSP_TRANSLATION_TARGET_INVALID(translation_target))
+      return false;
+#else
     if (!translation_target)
       return false;
+#endif
     generate_branch_patch_unconditional(
       external_block_exits[i].branch_source, translation_target);
   }
+
   return true;
 }
 
@@ -3439,5 +3530,182 @@ void flush_dynarec_caches(void)
   iwram_code_min = 0;
   iwram_code_max = 0x8000;
   flush_translation_cache_ram();
+}
+
+/*
+ * Partial dynarec SMC invalidation (TempGBA / gpsp-partial-flush) plus
+ * lr-gpsp-amcc patch-8: UB sentinel on the left chain, dynamic translation
+ * gates on CPU/store path only (not DMA). See:
+ *   https://github.com/andymcca/gpsp-partial-flush/
+ *   https://github.com/andymcca/lr-gpsp-amcc/commits/patch-8/
+ */
+#define SMC_TAG_UB16 0xFFFFu
+
+/* ARM PC of the instruction before the written word; clamped into IW/EW RAM. */
+static u32 partial_flush_translation_gate_pc(u32 address)
+{
+  u32 region = address >> 24;
+
+  if (region == 0x03)
+  {
+    u32 off = address & 0x7FFF;
+    u32 align = off & ~3u;
+    if (align < 4)
+      return 0x03000000u;
+    return 0x03000000u + align - 4u;
+  }
+  if (region == 0x02)
+  {
+    u32 off = address & 0x3FFFFu;
+    u32 align = off & ~3u;
+    if (align < 4)
+      return 0x02000000u;
+    return 0x02000000u + align - 4u;
+  }
+  return (address & ~3u) - 4u;
+}
+
+static void translation_gate_try_register(u32 address)
+{
+  u32 gate_pc = partial_flush_translation_gate_pc(address);
+  u32 i;
+  u32 lo_bit;
+  u32 hi_bit;
+
+  if ((address >> 24) != 0x02 && (address >> 24) != 0x03)
+    return;
+
+  if (translation_gate_filter_count != translation_gate_targets)
+    translation_gate_filter_rebuild();
+
+  lo_bit = 1u << translation_gate_hash_lo(gate_pc);
+  hi_bit = 1u << translation_gate_hash_hi(gate_pc);
+
+  if ((translation_gate_filter_lo & lo_bit) &&
+      (translation_gate_filter_hi & hi_bit))
+  {
+    for (i = 0; i < translation_gate_targets; i++)
+    {
+      if (translation_gate_target_pc[i] == gate_pc)
+        return;
+    }
+  }
+
+  if (translation_gate_targets < MAX_TRANSLATION_GATES)
+  {
+    translation_gate_target_pc[translation_gate_targets++] = gate_pc;
+    translation_gate_filter_lo |= lo_bit;
+    translation_gate_filter_hi |= hi_bit;
+    translation_gate_filter_count = translation_gate_targets;
+    return;
+  }
+
+  /* Keep adapting under heavy SMC: replace oldest entry in a small ring. */
+  translation_gate_target_pc[translation_gate_replace_rr &
+                             (MAX_TRANSLATION_GATES - 1)] = gate_pc;
+  translation_gate_replace_rr++;
+  translation_gate_filter_rebuild();
+}
+
+static void partial_flush_ram_inner(u32 address, int register_dynamic_gate)
+{
+  u8 *smc_data;
+  u8 *const ewram_smc_data = &ewram[0x40000];
+  u8 *const iwram_smc_data = iwram;
+  u8 *smc_data_area;
+  u8 *smc_data_area_end;
+  u8 *smc_data_right;
+  u32 region = address >> 24;
+  u16 v;
+
+  switch (region)
+  {
+    case 0x02:
+      smc_data = ewram_smc_data + (address & 0x3FFFE);
+      smc_data_area = ewram_smc_data;
+      smc_data_area_end = ewram_smc_data + 0x40000;
+      break;
+    case 0x03:
+      smc_data = iwram_smc_data + (address & 0x7FFE);
+      smc_data_area = iwram_smc_data;
+      smc_data_area_end = iwram_smc_data + 0x8000;
+      break;
+    default:
+      return;
+  }
+
+  smc_data_right = smc_data;
+  *((u16 *)smc_data) = 0;
+
+  if (register_dynamic_gate)
+    translation_gate_try_register(address);
+
+  while (1)
+  {
+    smc_data -= 2;
+    if (smc_data < smc_data_area)
+      smc_data = smc_data_area_end - 2;
+    v = *(u16 *)smc_data;
+    if (v == 0 || v == (u16)SMC_TAG_UB16)
+      break;
+    *(u16 *)smc_data = 0;
+
+    smc_data -= 2;
+    if (smc_data < smc_data_area)
+      smc_data = smc_data_area_end - 2;
+    v = *(u16 *)smc_data;
+    if (v == 0 || v == (u16)SMC_TAG_UB16)
+      break;
+    *(u16 *)smc_data = 0;
+  }
+
+  smc_data = smc_data_right;
+  while (1)
+  {
+    smc_data += 2;
+    if (smc_data == smc_data_area_end)
+      smc_data = smc_data_area;
+    v = *(u16 *)smc_data;
+    if (v == 0)
+      break;
+    *(u16 *)smc_data = 0;
+
+    smc_data += 2;
+    if (smc_data == smc_data_area_end)
+      smc_data = smc_data_area;
+    v = *(u16 *)smc_data;
+    if (v == 0)
+      break;
+    *(u16 *)smc_data = 0;
+  }
+}
+
+void partial_flush_ram_full(u32 address)
+{
+#ifdef NSPIRE_LIBRETRO
+  if (nspire_dynarec_ram_policy)
+  {
+    /* Not flush_translation_cache_ram() alone: after a prior flush,
+     * iwram_code_max / ewram_code_max are 0 so SMC mirror memset is skipped
+     * and tags stay stale while ram_translation_ptr resets (white screen). */
+    flush_dynarec_caches();
+    (void)address;
+    return;
+  }
+#endif
+  partial_flush_ram_inner(address, 1);
+}
+
+void partial_flush_ram_full_dma(u32 address)
+{
+#ifdef NSPIRE_LIBRETRO
+  if (nspire_dynarec_ram_policy)
+  {
+    flush_dynarec_caches();
+    (void)address;
+    return;
+  }
+#endif
+  partial_flush_ram_inner(address, 0);
 }
 

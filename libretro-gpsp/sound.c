@@ -25,6 +25,13 @@ gbc_sound_struct gbc_sound_channel[4];
 
 const u32 sound_frequency = GBA_SOUND_FREQUENCY;
 
+fixed16_16 sound_tick_delta_to_buffer_ticks(u32 tick_delta)
+{
+  return (fixed16_16)(((unsigned long long)tick_delta * (unsigned long long)GBA_SOUND_FREQUENCY *
+                       65536ULL) /
+                      (unsigned long long)GBC_BASE_RATE_INT);
+}
+
 u32 sound_on;
 #ifdef NSPIRE_LIBRETRO
 u32 global_enable_audio = 1;
@@ -76,6 +83,11 @@ unsigned sound_timer(fixed8_24 frequency_step, u32 channel)
 
     sample_status = ds->status;
   }
+
+#ifdef NSPIRE_NO_AUDIO
+  /* No speakers: keep FIFO/timer alignment without mixing into sound_buffer. */
+  sample_status = DIRECT_SOUND_INACTIVE;
+#endif
 
   // Unqueue 1 sample from the base of the DS FIFO and place it on the audio
   // buffer for as many samples as necessary. If the DS FIFO is 16 bytes or
@@ -402,6 +414,49 @@ u32 gbc_sound_master_volume;
 
 void render_gbc_sound()
 {
+#ifdef NSPIRE_NO_AUDIO
+  u16 sound_status = read_ioreg(REG_SOUNDCNT_X) & 0xFFF0;
+  u32 tick_delta = cpu_ticks - gbc_sound_last_cpu_ticks;
+  fixed16_16 buffer_ticks = sound_tick_delta_to_buffer_ticks(tick_delta);
+  gbc_sound_struct *gs;
+
+  if (!tick_delta)
+    return;
+
+  gbc_update_count++;
+  gbc_sound_partial_ticks += fp16_16_fractional_part(buffer_ticks);
+  buffer_ticks = fp16_16_to_u32(buffer_ticks);
+
+  if (gbc_sound_partial_ticks > 0xFFFF)
+  {
+    buffer_ticks += 1;
+    gbc_sound_partial_ticks &= 0xFFFF;
+  }
+
+  if (sound_on == 1)
+  {
+    gs = gbc_sound_channel + 0;
+    if (gs->active_flag)
+      sound_status |= 0x01;
+    gs = gbc_sound_channel + 1;
+    if (gs->active_flag)
+      sound_status |= 0x02;
+    gs = gbc_sound_channel + 2;
+    if (gbc_sound_wave_update)
+      gbc_sound_wave_update = 0;
+    if (gs->active_flag && gs->master_enable)
+      sound_status |= 0x04;
+    gs = gbc_sound_channel + 3;
+    if (gs->active_flag)
+      sound_status |= 0x08;
+  }
+
+  write_ioreg(REG_SOUNDCNT_X, sound_status);
+  gbc_sound_last_cpu_ticks = cpu_ticks;
+  gbc_sound_buffer_index =
+   (gbc_sound_buffer_index + (buffer_ticks * 2)) % BUFFER_SIZE;
+  return;
+#else
   u32 i, i2;
   gbc_sound_struct *gs = gbc_sound_channel;
   fixed16_16 sample_index, frequency_step;
@@ -413,8 +468,7 @@ void render_gbc_sound()
   u16 sound_status = read_ioreg(REG_SOUNDCNT_X) & 0xFFF0;
   const s8 *sample_data;
   u32 tick_delta = cpu_ticks - gbc_sound_last_cpu_ticks;
-  fixed16_16 buffer_ticks = float_to_fp16_16((float)(tick_delta) *
-                                             sound_frequency / GBC_BASE_RATE);
+  fixed16_16 buffer_ticks = sound_tick_delta_to_buffer_ticks(tick_delta);
   if (!tick_delta)
     return;
 
@@ -505,6 +559,7 @@ void render_gbc_sound()
   gbc_sound_last_cpu_ticks = cpu_ticks;
   gbc_sound_buffer_index =
    (gbc_sound_buffer_index + (buffer_ticks * 2)) % BUFFER_SIZE;
+#endif /* !NSPIRE_NO_AUDIO */
 }
 
 // Special thanks to blarrg for the LSFR frequency used in Meridian, as posted

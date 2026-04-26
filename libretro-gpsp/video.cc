@@ -22,6 +22,50 @@ extern "C" {
   #include "common.h"
 }
 
+#ifdef NSPIRE_LIBRETRO
+extern "C" {
+extern u32 nspire_gba_blend_off;
+void video_fill_u16_strip_arm(u16 *dst, u32 nh, u32 value);
+}
+#endif
+
+namespace {
+
+enum { k_mosaic_mod_nmax = 512 };
+
+static u8 g_mosaic_mod_tab[16 * k_mosaic_mod_nmax];
+static u8 g_mosaic_mod_ready;
+
+static void mosaic_mod_fill(void)
+{
+  for (u32 di = 1; di <= 16; di++) {
+    u32 base = (di - 1u) * k_mosaic_mod_nmax;
+    for (u32 i = 0; i < k_mosaic_mod_nmax; i++)
+      g_mosaic_mod_tab[base + i] = (u8)(i % di);
+  }
+  g_mosaic_mod_ready = 1;
+}
+
+/* n % d for mosaic divisors d in 1..16 without a per-call soft divide when n
+ * is small (covers GBA VCOUNT, tile row indices, and typical OBJ row offsets). */
+static inline u32 mosaic_umod_u32(u32 n, u32 d)
+{
+  if (!g_mosaic_mod_ready)
+    mosaic_mod_fill();
+
+  if (d <= 1u)
+    return 0u;
+  if (d > 16u)
+    return n % d;
+  if ((d & (d - 1u)) == 0u)
+    return n & (d - 1u);
+  if (n < k_mosaic_mod_nmax)
+    return g_mosaic_mod_tab[(d - 1u) * k_mosaic_mod_nmax + n];
+  return n % d;
+}
+
+} // namespace
+
 u16* gba_screen_pixels = NULL;
 
 #define get_screen_pixels()   gba_screen_pixels
@@ -78,6 +122,26 @@ typedef struct
 #define OBJ_MOD_WINDOW     2
 #define OBJ_MOD_INVALID    3
 
+/* Horizontal mosaic uses a phase counter (see mosaic_advance). Vertical
+ * factors 1..16 use mosaic_umod_u32 (table) to avoid __aeabi_uidivmod on
+ * common paths. */
+template<bool mosaic_on>
+static inline bool mosaic_take_sample(u32 mosh, u32 &phase)
+{
+  if (!mosaic_on)
+    return true;
+  return phase == 0;
+}
+
+template<bool mosaic_on>
+static inline void mosaic_advance(u32 mosh, u32 &phase)
+{
+  if (!mosaic_on)
+    return;
+  if (++phase >= mosh)
+    phase = 0;
+}
+
 // BLDCNT color effect modes
 #define COL_EFFECT_NONE   0x0
 #define COL_EFFECT_BLEND  0x1
@@ -105,12 +169,15 @@ typedef struct
 
 // Generate bit mask (bits 9th and 10th) with information about the pixel
 // status (1st and/or 2nd target) for later blending.
-static inline u16 color_flags(u32 layer) {
-  u32 bldcnt = read_ioreg(REG_BLDCNT);
+static inline u16 color_flags_from_bldcnt(u32 layer, u32 bldcnt) {
   return (
-    ((bldcnt >> layer) & 0x01) |            // 1st target
-    ((bldcnt >> (layer + 7)) & 0x02)        // 2nd target
+    ((bldcnt >> layer) & 0x01) |
+    ((bldcnt >> (layer + 7)) & 0x02)
   ) << 9;
+}
+
+static inline u16 color_flags(u32 layer) {
+  return color_flags_from_bldcnt(layer, read_ioreg(REG_BLDCNT));
 }
 
 static const u32 map_widths[] = { 256, 512, 256, 512 };
@@ -293,13 +360,14 @@ static void render_scanline_text_fast(u32 layer,
   u16 vcount = read_ioreg(REG_VCOUNT);
   u32 map_size = (bg_control >> 14) & 0x03;
   u32 map_width = map_widths[map_size];
-  u32 hoffset = (start + read_ioreg(REG_BGxHOFS(layer))) % 512;
-  u32 voffset = (vcount + read_ioreg(REG_BGxVOFS(layer))) % 512;
+  u32 hoffset = (start + read_ioreg(REG_BGxHOFS(layer))) & 511;
+  u32 voffset = (vcount + read_ioreg(REG_BGxVOFS(layer))) & 511;
   stype *dest_ptr = ((stype*)scanline) + start;
 
   // Calculate combine masks. These store 2 bits of info: 1st and 2nd target.
-  // If set, the current pixel belongs to a layer that is 1st or 2nd target.
-  u32 bg_comb = color_flags(5), px_comb = color_flags(layer);
+  u32 bldcnt = read_ioreg(REG_BLDCNT);
+  u32 bg_comb = color_flags_from_bldcnt(5, bldcnt);
+  u32 px_comb = color_flags_from_bldcnt(layer, bldcnt);
 
   // Background map data is in vram, at an offset specified in 2K blocks.
   // (each map data block is 32x32 tiles, at 16bpp, so 2KB)
@@ -311,10 +379,10 @@ static void render_scanline_text_fast(u32 layer,
 
   // Skip the top one/two block(s) if using the bottom half
   if ((map_size & 0x02) && (voffset >= 256))
-    map_base += ((map_width / 8) * 32);
+    map_base += ((map_width >> 3) * 32);
 
   // Skip the top tiles within the block
-  map_base += (((voffset % 256) / 8) * 32);
+  map_base += (((voffset & 255) >> 3) * 32);
 
   // we might need to render from two charblocks, store a second pointer.
   second_ptr = map_ptr = map_base;
@@ -329,15 +397,15 @@ static void render_scanline_text_fast(u32 layer,
       second_ptr += (32 * 32);
     }
   } else {
-    hoffset %= 256;     // Background is 256 pixels wide
+    hoffset &= 255;     // Background is 256 pixels wide
   }
 
   // Skip the left blocks within the block
-  map_ptr += hoffset / 8;
+  map_ptr += hoffset >> 3;
 
   // Render a single scanline of text tiles
   u32 tilewidth = is8bpp ? tile_width_8bpp : tile_width_4bpp;
-  u32 vert_pix_offset = (voffset % 8) * tilewidth;
+  u32 vert_pix_offset = (voffset & 7) * tilewidth;
   // Calculate the pixel offset between a line and its "flipped" mirror.
   // The values can be {56, 40, 24, 8, -8, -24, -40, -56}
   s32 vflip_off = is8bpp ?
@@ -351,7 +419,7 @@ static void render_scanline_text_fast(u32 layer,
   // Number of pixels available until the end of the tile block
   u32 pixel_run = 256 - hoffset;
 
-  u32 tile_hoff = hoffset % 8;
+  u32 tile_hoff = hoffset & 7;
   u32 partial_hcnt = 8 - tile_hoff;
 
   if (tile_hoff) {
@@ -376,7 +444,7 @@ static void render_scanline_text_fast(u32 layer,
     return;
 
   // Now render full tiles
-  u32 todraw = MIN(end, pixel_run) / 8;
+  u32 todraw = MIN(end, pixel_run) >> 3;
 
   for (u32 i = 0; i < todraw; i++, dest_ptr += 8) {
     u16 tile = eswap16(*map_ptr++);
@@ -398,7 +466,7 @@ static void render_scanline_text_fast(u32 layer,
   if (!pixel_run)
     map_ptr = second_ptr;
 
-  todraw = end / 8;
+  todraw = end >> 3;
   for (u32 i = 0; i < todraw; i++, dest_ptr += 8) {
     u16 tile = eswap16(*map_ptr++);
     if (tile & 0x400)   // Tile horizontal flip
@@ -429,26 +497,29 @@ static void render_scanline_text_mosaic(u32 layer,
  u32 start, u32 end, void *scanline, const u16 * paltbl)
 {
   u32 bg_control = read_ioreg(REG_BGxCNT(layer));
-  const u32 mosh = (read_ioreg(REG_MOSAIC) & 0xF) + 1;
-  const u32 mosv = ((read_ioreg(REG_MOSAIC) >> 4) & 0xF) + 1;
+  u32 mosaic_reg = read_ioreg(REG_MOSAIC);
+  const u32 mosh = (mosaic_reg & 0xF) + 1;
+  const u32 mosv = ((mosaic_reg >> 4) & 0xF) + 1;
   u16 vcount = read_ioreg(REG_VCOUNT);
   u32 map_size = (bg_control >> 14) & 0x03;
   u32 map_width = map_widths[map_size];
-  u32 hoffset = (start + read_ioreg(REG_BGxHOFS(layer))) % 512;
-  u16 vmosoff = vcount - vcount % mosv;
-  u32 voffset = (vmosoff + read_ioreg(REG_BGxVOFS(layer))) % 512;
+  u32 hoffset = (start + read_ioreg(REG_BGxHOFS(layer))) & 511;
+  u16 vmosoff = (u16)(vcount - mosaic_umod_u32((u32)vcount, mosv));
+  u32 voffset = (vmosoff + read_ioreg(REG_BGxVOFS(layer))) & 511;
   stype *dest_ptr = ((stype*)scanline) + start;
 
-  u32 bg_comb = color_flags(5), px_comb = color_flags(layer);
+  u32 bldcnt_m = read_ioreg(REG_BLDCNT);
+  u32 bg_comb = color_flags_from_bldcnt(5, bldcnt_m);
+  u32 px_comb = color_flags_from_bldcnt(layer, bldcnt_m);
 
   u32 base_block = (bg_control >> 8) & 0x1F;
   u16 *map_base = (u16 *)&vram[base_block * 2048];
   u16 *map_ptr, *second_ptr;
 
   if ((map_size & 0x02) && (voffset >= 256))
-    map_base += ((map_width / 8) * 32);
+    map_base += ((map_width >> 3) * 32);
 
-  map_base += (((voffset % 256) / 8) * 32);
+  map_base += (((voffset & 255) >> 3) * 32);
 
   second_ptr = map_ptr = map_base;
 
@@ -462,15 +533,15 @@ static void render_scanline_text_mosaic(u32 layer,
       second_ptr += (32 * 32);
     }
   } else {
-    hoffset %= 256;     // Background is 256 pixels wide
+    hoffset &= 255;     // Background is 256 pixels wide
   }
 
   // Skip the left blocks within the block
-  map_ptr += hoffset / 8;
+  map_ptr += hoffset >> 3;
 
   // Render a single scanline of text tiles
   u32 tilewidth = is8bpp ? tile_width_8bpp : tile_width_4bpp;
-  u32 vert_pix_offset = (voffset % 8) * tilewidth;
+  u32 vert_pix_offset = (voffset & 7) * tilewidth;
   // Calculate the pixel offset between a line and its "flipped" mirror.
   // The values can be {56, 40, 24, 8, -8, -24, -40, -56}
   s32 vflip_off = is8bpp ?
@@ -486,10 +557,11 @@ static void render_scanline_text_mosaic(u32 layer,
 
   // Iterate pixel by pixel, loading data every N pixels to honor mosaic effect
   u8 pval = 0;
+  u32 mos_phase = 0;
   for (u32 i = 0; start < end; start++, i++, dest_ptr++) {
     u16 tile = eswap16(*map_ptr);
 
-    if (!(i % mosh)) {
+    if (mos_phase == 0) {
       const u8 *tile_ptr = &tile_base[(tile & 0x3FF) * (is8bpp ? 64 : 32)];
 
       bool hflip = (tile & 0x400);
@@ -497,16 +569,19 @@ static void render_scanline_text_mosaic(u32 layer,
         tile_ptr += vflip_off;
 
       // Load byte or nibble with pixel data.
-      if (is8bpp) {
-        if (hflip)
-          pval = tile_ptr[7 - hoffset % 8];
-        else
-          pval = tile_ptr[hoffset % 8];
-      } else {
-        if (hflip)
-          pval = (tile_ptr[(7 - hoffset % 8) >> 1] >> (((hoffset & 1) ^ 1) * 4)) & 0xF;
-        else
-          pval = (tile_ptr[(hoffset % 8) >> 1] >> ((hoffset & 1) * 4)) & 0xF;
+      {
+        u32 hp = hoffset & 7;
+        if (is8bpp) {
+          if (hflip)
+            pval = tile_ptr[7 - hp];
+          else
+            pval = tile_ptr[hp];
+        } else {
+          if (hflip)
+            pval = (tile_ptr[(7 - hp) >> 1] >> (((hoffset & 1) ^ 1) * 4)) & 0xF;
+          else
+            pval = (tile_ptr[hp >> 1] >> ((hoffset & 1) * 4)) & 0xF;
+        }
       }
     }
 
@@ -541,12 +616,14 @@ static void render_scanline_text_mosaic(u32 layer,
 
     // Need to continue from the next charblock
     hoffset++;
-    if (hoffset % 8 == 0)
+    if ((hoffset & 7) == 0)
       map_ptr++;
     if (hoffset >= 256) {
       hoffset = 0;
       map_ptr = second_ptr;
     }
+
+    mosaic_advance<true>(mosh, mos_phase);
   }
 }
 
@@ -556,7 +633,7 @@ static void render_scanline_text(u32 layer,
 {
   // Tile mode has 4 and 8 bpp modes.
   u32 bg_control = read_ioreg(REG_BGxCNT(layer));
-  bool is8bpp = (read_ioreg(REG_BGxCNT(layer)) & 0x80);
+  bool is8bpp = (bg_control & 0x80) != 0;
   const u32 mosamount = read_ioreg(REG_MOSAIC) & 0xFF;
   bool has_mosaic = (bg_control & 0x40) && (mosamount != 0);
 
@@ -583,11 +660,11 @@ static inline u8 lookup_pix_8bpp(
   // Pitch represents the log2(number of tiles per row) (from 16 to 128)
   u32 map_pitch = map_size + 4;
   // Given coords (px,py) in the background space, find the tile.
-  u32 mapoff = (px / 8) + ((py / 8) << map_pitch);
+  u32 mapoff = (px >> 3) + ((py >> 3) << map_pitch);
   // Each tile is 8x8, so 64 bytes each.
   const u8 *tile_ptr = &tile_base[map_base[mapoff] * tile_size_8bpp];
   // Read the 8bit color within the tile.
-  return tile_ptr[(px % 8) + ((py % 8) * 8)];
+  return tile_ptr[(px & 7) + ((py & 7) * 8)];
 }
 
 
@@ -641,9 +718,9 @@ static inline void render_affine_background(
   const u16* pal) {
 
   dtype *dst_ptr = (dtype*)dst_ptr_raw;
-  // Backdrop and current layer combine bits.
-  u32 bg_comb = color_flags(5);
-  u32 px_comb = color_flags(layer);
+  u32 bldcnt_af = read_ioreg(REG_BLDCNT);
+  u32 bg_comb = color_flags_from_bldcnt(5, bldcnt_af);
+  u32 px_comb = color_flags_from_bldcnt(layer, bldcnt_af);
 
   s32 dx = (s16)read_ioreg(REG_BGxPA(layer));
   s32 dy = (s16)read_ioreg(REG_BGxPC(layer));
@@ -661,26 +738,30 @@ static inline void render_affine_background(
     // In wrap mode the entire space is covered, since it "wraps" at the edges
     u8 pval = 0;
     if (rotate) {
+      u32 mos_phase = 0;
       for (u32 i = 0; cnt; i++, cnt--) {
         u32 pix_x = (u32)(source_x >> 8) & (width_height-1);
         u32 pix_y = (u32)(source_y >> 8) & (width_height-1);
 
         // Lookup pixel and draw it (only every Nth if mosaic is on)
-        if (!mosaic || !(i % mosh))
+        if (mosaic_take_sample<mosaic>(mosh, mos_phase))
           pval = lookup_pix_8bpp(pix_x, pix_y, tile_base, map_base, map_size);
         rend_pix_8bpp<dtype, rdtype, isbase>(dst_ptr++, pval, bg_comb, px_comb, pal);
 
         source_x += dx; source_y += dy;  // Move to the next pixel
+        mosaic_advance<mosaic>(mosh, mos_phase);
       }
     } else {
       // Y coordinate stays contant across the walk.
       const u32 pix_y = (u32)(source_y >> 8) & (width_height-1);
+      u32 mos_phase = 0;
       for (u32 i = 0; cnt; i++, cnt--) {
         u32 pix_x = (u32)(source_x >> 8) & (width_height-1);
-        if (!mosaic || !(i % mosh))
+        if (mosaic_take_sample<mosaic>(mosh, mos_phase))
           pval = lookup_pix_8bpp(pix_x, pix_y, tile_base, map_base, map_size);
         rend_pix_8bpp<dtype, rdtype, isbase>(dst_ptr++, pval, bg_comb, px_comb, pal);
         source_x += dx;  // Only moving in the X direction.
+        mosaic_advance<mosaic>(mosh, mos_phase);
       }
     }
   } else {
@@ -706,6 +787,7 @@ static inline void render_affine_background(
 
       // Draw background pixels by looking them up in the map
       u8 pval = 0;
+      u32 mos_phase = 0;
       for (u32 i = 0; cnt; i++, cnt--) {
         u32 pix_x = (u32)(source_x >> 8), pix_y = (u32)(source_y >> 8);
 
@@ -714,12 +796,13 @@ static inline void render_affine_background(
           break;
 
         // Lookup pixel and draw it.
-        if (!mosaic || !(i % mosh))
+        if (mosaic_take_sample<mosaic>(mosh, mos_phase))
           pval = lookup_pix_8bpp(pix_x, pix_y, tile_base, map_base, map_size);
         rend_pix_8bpp<dtype, rdtype, isbase>(dst_ptr++, pval, bg_comb, px_comb, pal);
 
         // Move to the next pixel, update coords accordingly
         source_x += dx; source_y += dy;
+        mosaic_advance<mosaic>(mosh, mos_phase);
       }
     } else {
       // Specialized version for scaled-only backgrounds
@@ -740,16 +823,18 @@ static inline void render_affine_background(
           cnt--;
         }
         // Draw actual background
+        u32 mos_phase = 0;
         for (u32 i = 0; cnt; i++, cnt--) {
           u32 pix_x = (u32)(source_x >> 8);
           if (pix_x >= width_height)
             break;
 
-          if (!mosaic || !(i % mosh))
+          if (mosaic_take_sample<mosaic>(mosh, mos_phase))
             pval = lookup_pix_8bpp(pix_x, pix_y, tile_base, map_base, map_size);
           rend_pix_8bpp<dtype, rdtype, isbase>(dst_ptr++, pval, bg_comb, px_comb, pal);
 
           source_x += dx;
+          mosaic_advance<mosaic>(mosh, mos_phase);
         }
       }
     }
@@ -785,7 +870,8 @@ static void render_scanline_affine(u32 layer,
   const u32 mosamount = read_ioreg(REG_MOSAIC) & 0xFF;
 
   bool has_mosaic = (bg_control & 0x40) && (mosamount != 0);
-  bool has_rotation = read_ioreg(REG_BGxPC(layer)) != 0;
+  s16 bgpc = (s16)read_ioreg(REG_BGxPC(layer));
+  bool has_rotation = (bgpc != 0);
   bool has_wrap = (bg_control >> 13) & 1;
 
   // Number of pixels to render
@@ -879,11 +965,13 @@ static inline void render_scanline_bitmap(
     u32 pixcnt = MIN(end - start, width - pixel_x);
     pixfmt *valptr = &src_ptr[pixel_x + (pixel_y * width)];
     pixfmt val = 0;
+    u32 mos_phase = 0;
     for (u32 i = 0; pixcnt; i++, pixcnt--, valptr++) {
       // Pretty much pixel copier
-      if (!mosaic || !(i % mosh))
+      if (mosaic_take_sample<mosaic>(mosh, mos_phase))
         val = sizeof(pixfmt) == 2 ? eswap16(*valptr) : *valptr;
       bitmap_pixel_write<rdtype, dsttype, mode, pixfmt>(dst_ptr++, val, palptr, px_attr);
+      mosaic_advance<mosaic>(mosh, mos_phase);
     }
   }
   else if (rdmode == SCALED) {
@@ -902,18 +990,20 @@ static inline void render_scanline_bitmap(
 
     u32 cnt = end - start;
     pixfmt val = 0;
+    u32 mos_phase = 0;
     for (u32 i = 0; cnt; i++, cnt--) {
       u32 pixel_x = (u32)(source_x >> 8);
       if (pixel_x >= width)
         break;  // We reached the end of the bitmap
 
-      if (!mosaic || !(i % mosh)) {
+      if (mosaic_take_sample<mosaic>(mosh, mos_phase)) {
         pixfmt *valptr = &src_ptr[pixel_x + (pixel_y * width)];
         val = sizeof(pixfmt) == 2 ? eswap16(*valptr) : *valptr;
       }
 
       bitmap_pixel_write<rdtype, dsttype, mode, pixfmt>(dst_ptr++, val, palptr, px_attr);
       source_x += dx;
+      mosaic_advance<mosaic>(mosh, mos_phase);
     }
   } else {
     // Look for the first pixel to be drawn.
@@ -927,7 +1017,8 @@ static inline void render_scanline_bitmap(
     }
 
     pixfmt val = 0;
-    for (u32 i = 0; start < end; start++) {
+    u32 mos_phase = 0;
+    while (start < end) {
       u32 pixel_x = (u32)(source_x >> 8), pixel_y = (u32)(source_y >> 8);
 
       // Check if we run out of background pixels, stop drawing.
@@ -935,7 +1026,7 @@ static inline void render_scanline_bitmap(
         break;
 
       // Lookup pixel and draw it.
-      if (!mosaic || !(i % mosh)) {
+      if (mosaic_take_sample<mosaic>(mosh, mos_phase)) {
         pixfmt *valptr = &src_ptr[pixel_x + (pixel_y * width)];
         val = sizeof(pixfmt) == 2 ? eswap16(*valptr) : *valptr;
       }
@@ -945,6 +1036,8 @@ static inline void render_scanline_bitmap(
       // Move to the next pixel, update coords accordingly
       source_x += dx;
       source_y += dy;
+      mosaic_advance<mosaic>(mosh, mos_phase);
+      start++;
     }
   }
 }
@@ -1100,8 +1193,8 @@ static void render_object(
 
   if (delta_x < 0) {      // Left part is outside of the screen/window.
     u32 offx = -delta_x;  // How many pixels did we skip from the object?
-    s32 block_off = offx / 8;
-    u32 tile_off = offx % 8;
+    s32 block_off = (s32)(offx >> 3);
+    u32 tile_off = offx & 7;
 
     // Skip the first object tiles (skips in the flip direction)
     tile_offset += block_off * tile_size_off;
@@ -1125,7 +1218,7 @@ static void render_object(
   }
 
   // Render full tiles to the scan line.
-  s32 num_tiles = cnt / 8;
+  s32 num_tiles = (s32)(cnt >> 3);
   while (num_tiles--) {
     // Render full tiles
     render_obj_tile_Nbpp<stype, rdtype, is8bpp, hflip>(
@@ -1135,7 +1228,7 @@ static void render_object(
   }
 
   // Render any partial tile on the end
-  cnt = cnt % 8;
+  cnt &= 7;
   if (cnt)
     render_obj_part_tile_Nbpp<stype, rdtype, is8bpp, hflip>(
       px_comb, dst_ptr, 0, cnt, tile_offset, palette, palptr);
@@ -1161,23 +1254,24 @@ static void render_object_mosaic(
   u32 px_attr = px_comb | palette | 0x100;  // Combine flags + high palette bit
 
   u8 pval = 0;
+  u32 mos_phase = 0;
   for (u32 i = 0; i < cnt; i++, offx++, dst_ptr++) {
-    if (!(i % mosh)) {
+    if (mos_phase == 0) {
       // Load tile pixel color.
-      u32 tile_offset = base_tile_offset + (offx / 8) * tile_size_off;
+      u32 tile_offset = base_tile_offset + (offx >> 3) * tile_size_off;
       const u8* tile_ptr = &vram[0x10000 + (tile_offset & 0x7FFF)];
+      u32 hp = offx & 7;
 
-      // Lookup for each mode and flip value.
       if (is8bpp) {
         if (hflip)
-          pval = tile_ptr[7 - offx % 8];
+          pval = tile_ptr[7 - hp];
         else
-          pval = tile_ptr[offx % 8];
+          pval = tile_ptr[hp];
       } else {
         if (hflip)
-          pval = (tile_ptr[(7 - offx % 8) >> 1] >> (((offx & 1) ^ 1) * 4)) & 0xF;
+          pval = (tile_ptr[(7 - hp) >> 1] >> (((offx & 1) ^ 1) * 4)) & 0xF;
         else
-          pval = (tile_ptr[(offx % 8) >> 1] >> ((offx & 1) * 4)) & 0xF;
+          pval = (tile_ptr[hp >> 1] >> ((offx & 1) * 4)) & 0xF;
       }
     }
 
@@ -1197,6 +1291,8 @@ static void render_object_mosaic(
       else if (rdtype == PIXCOPY)
         *dst_ptr = dst_ptr[240];
     }
+
+    mosaic_advance<true>(mosh, mos_phase);
   }
 }
 
@@ -1223,14 +1319,14 @@ static void render_affine_object(
   // Object dimensions and boundaries
   u32 obj_dimw = obji->obj_w;
   u32 obj_dimh = obji->obj_h;
-  s32 middle_x = is_double ? obji->obj_w : (obji->obj_w / 2);
-  s32 middle_y = is_double ? obji->obj_h : (obji->obj_h / 2);
+  s32 middle_x = is_double ? (s32)obji->obj_w : (s32)(obji->obj_w >> 1);
+  s32 middle_y = is_double ? (s32)obji->obj_h : (s32)(obji->obj_h >> 1);
   s32 obj_width  = is_double ? obji->obj_w * 2 : obji->obj_w;
   s32 obj_height = is_double ? obji->obj_h * 2 : obji->obj_h;
 
   s32 vcount = read_ioreg(REG_VCOUNT);
   if (mosaic)
-    vcount -= vcount % mosv;
+    vcount -= (s32)mosaic_umod_u32((u32)vcount, mosv);
   s32 y_delta = vcount - (obji->obj_y + middle_y);
 
   if (obji->obj_x < (signed)start)
@@ -1249,7 +1345,7 @@ static void render_affine_object(
   dst_ptr += d_start;
 
   bool obj1dmap = read_ioreg(REG_DISPCNT) & 0x40;
-  const u32 tile_pitch = obj1dmap ? (obj_dimw / 8) * tile_bsize : 1024;
+  const u32 tile_pitch = obj1dmap ? ((obj_dimw >> 3) * tile_bsize) : 1024;
   u32 px_attr = pxcomb | palette | 0x100;  // Combine flags + high palette bit
 
   // Skip pixels outside of the sprite area, until we reach the sprite "inside"
@@ -1269,6 +1365,7 @@ static void render_affine_object(
 
   // Draw sprite pixels by looking them up first. Lookup address is tricky!
   u8 pixval = 0;
+  u32 mos_phase = 0;
   for (u32 i = 0; i < cnt; i++) {
     u32 pixel_x = (u32)(source_x >> 8), pixel_y = (u32)(source_y >> 8);
 
@@ -1277,7 +1374,7 @@ static void render_affine_object(
       return;
 
     // For mosaic, we "remember" the last looked up pixel.
-    if (!mosaic || !(i % mosh)) {
+    if (mosaic_take_sample<mosaic>(mosh, mos_phase)) {
       // Lookup pixel and draw it.
       if (is8bpp) {
         // We lookup the byte directly and render it.
@@ -1324,6 +1421,7 @@ static void render_affine_object(
     source_x += dx;
     if (rotate)
       source_y += dy;
+    mosaic_advance<mosaic>(mosh, mos_phase);
   }
 }
 
@@ -1375,19 +1473,19 @@ inline static void render_sprite(
     u32 voffset = vflip ? obji->obj_y + obji->obj_h - vcount - 1
                         : vcount - obji->obj_y;
     if (mosaic)
-      voffset -= voffset % mosv;
+      voffset -= mosaic_umod_u32(voffset, mosv);
 
     // Calculate base tile for the object (points to the row to be drawn).
     u32 tile_bsize  = is8bpp ? tile_size_8bpp : tile_size_4bpp;
     u32 tile_bwidth = is8bpp ? tile_width_8bpp : tile_width_4bpp;
-    u32 obj_pitch = obj1dmap ? (obji->obj_w / 8) * tile_bsize : 1024;
-    u32 hflip_off = hflip ? ((obji->obj_w / 8) - 1) * tile_bsize : 0;
+    u32 obj_pitch = obj1dmap ? ((obji->obj_w >> 3) * tile_bsize) : 1024;
+    u32 hflip_off = hflip ? (((obji->obj_w >> 3) - 1) * tile_bsize) : 0;
 
     // Calculate the pointer to the tile.
     const u32 tile_offset =
       base_tile +                    // Char offset
-      (voffset / 8) * obj_pitch +    // Select tile row offset
-      (voffset % 8) * tile_bwidth +  // Skip tile rows
+      (voffset >> 3) * obj_pitch +    // Select tile row offset
+      (voffset & 7) * tile_bwidth +  // Skip tile rows
       hflip_off;                     // Account for horizontal flip
 
     // Make everything relative to start
@@ -1623,6 +1721,12 @@ static void order_layers(u32 layer_flags, u32 vcnt)
 {
   bool obj_enabled = (layer_flags & 0x10);
   s32 priority;
+  u16 bgcnt[4];
+
+  bgcnt[0] = read_ioreg(REG_BGxCNT(0));
+  bgcnt[1] = read_ioreg(REG_BGxCNT(1));
+  bgcnt[2] = read_ioreg(REG_BGxCNT(2));
+  bgcnt[3] = read_ioreg(REG_BGxCNT(3));
 
   layer_count = 0;
 
@@ -1634,7 +1738,7 @@ static void order_layers(u32 layer_flags, u32 vcnt)
     for(lnum = 3; lnum >= 0; lnum--)
     {
       if(((layer_flags >> lnum) & 1) &&
-         ((read_ioreg(REG_BGxCNT(lnum)) & 0x03) == priority))
+         ((bgcnt[lnum] & 0x03) == (u16)priority))
       {
         layer_order[layer_count++] = lnum;
       }
@@ -1653,8 +1757,6 @@ static void order_layers(u32 layer_flags, u32 vcnt)
 // Here follow the mask value to separate/expand the color to 32 bit,
 // the mask to detect overflows in the blend operation and
 
-#define BLND_MSK (SATR_MSK | SATG_MSK | SATB_MSK)
-
 #ifdef USE_XBGR1555_FORMAT
   #define OVFG_MSK 0x04000000
   #define OVFR_MSK 0x00008000
@@ -1670,6 +1772,8 @@ static void order_layers(u32 layer_flags, u32 vcnt)
   #define SATR_MSK 0x0000F800
   #define SATB_MSK 0x0000001F
 #endif
+
+#define BLND_MSK (SATR_MSK | SATG_MSK | SATB_MSK)
 
 typedef enum
 {
@@ -1687,7 +1791,7 @@ typedef enum
 // Bit 10 is set if the pixel belongs to a 2nd target layer
 // Bit 11 is set if the pixel belongs to a ST-object
 template <blendtype bldtype, bool st_objs>
-static void merge_blend(u32 start, u32 end, u16 *dst, u32 *src) {
+static void merge_blend(u32 start, u32 end, u16 * __restrict dst, u32 * __restrict src) {
   u32 bldalpha = read_ioreg(REG_BLDALPHA);
   u32 brightf = MIN(16, read_ioreg(REG_BLDY) & 0x1F);
   u32 blend_a = MIN(16, (bldalpha >> 0) & 0x1F);
@@ -1771,7 +1875,7 @@ static void merge_blend(u32 start, u32 end, u16 *dst, u32 *src) {
 
 // Applies brighten/darken effect to a bunch of color-indexed pixels.
 template <blendtype bldtype>
-static void merge_brightness(u32 start, u32 end, u16 *srcdst) {
+static void merge_brightness(u32 start, u32 end, u16 * __restrict srcdst) {
   u32 brightness = MIN(16, read_ioreg(REG_BLDY) & 0x1F);
 
   while (start < end) {
@@ -1796,6 +1900,16 @@ template<rendtype rdmode, typename dsttype>
 void fill_line_background(u32 start, u32 end, dsttype *scanline) {
   dsttype bgcol = palette_ram_converted[0];
   u16 bg_comb = color_flags(5);
+  u32 n = end - start;
+  if (!n)
+    return;
+#ifdef NSPIRE_LIBRETRO
+  if (sizeof(dsttype) == sizeof(u16)) {
+    u16 v = (rdmode == FULLCOLOR) ? (u16)bgcol : (u16)(0 | bg_comb);
+    video_fill_u16_strip_arm((u16 *)scanline + start, n, v);
+    return;
+  }
+#endif
   while (start < end)
     if (rdmode == FULLCOLOR)
       scanline[start++] = bgcol;
@@ -1808,11 +1922,20 @@ void fill_line_background(u32 start, u32 end, dsttype *scanline) {
 static void render_backdrop(u32 start, u32 end, u16 *scanline) {
   u16 bldcnt = read_ioreg(REG_BLDCNT);
   u16 pixcol = palette_ram_converted[0];
+#ifdef NSPIRE_LIBRETRO
+  if (nspire_gba_blend_off) {
+    u32 nfill = end - start;
+    if (nfill)
+      video_fill_u16_strip_arm(scanline + start, nfill, pixcol);
+    return;
+  }
+#endif
   u32 effect = (bldcnt >> 6) & 0x03;
   u32 bd_1st_target = ((bldcnt >> 0x5) & 0x01);
+  u32 bldy_raw = read_ioreg(REG_BLDY) & 0x1F;
 
   if (bd_1st_target && effect == COL_EFFECT_BRIGHT) {
-    u32 brightness = MIN(16, read_ioreg(REG_BLDY) & 0x1F);
+    u32 brightness = MIN(16, bldy_raw);
 
     // Unpack 16 bit pixel for fast blending operation
     u32 epixel = (pixcol | (pixcol << 16)) & BLND_MSK;
@@ -1822,15 +1945,24 @@ static void render_backdrop(u32 start, u32 end, u16 *scanline) {
     pixcol = (epixel >> 16) | epixel;
   }
   else if (bd_1st_target && effect == COL_EFFECT_DARK) {
-    u32 brightness = MIN(16, read_ioreg(REG_BLDY) & 0x1F);
+    u32 brightness = MIN(16, bldy_raw);
     u32 epixel = (pixcol | (pixcol << 16)) & BLND_MSK;
     epixel = ((epixel * (16 - brightness)) >> 4) & BLND_MSK;  // Pixel color
     pixcol = (epixel >> 16) | epixel;
   }
 
   // Fill the line with that color
-  while (start < end)
-    scanline[start++] = pixcol;
+  {
+    u32 nfill = end - start;
+    if (nfill) {
+#ifdef NSPIRE_LIBRETRO
+      video_fill_u16_strip_arm(scanline + start, nfill, pixcol);
+#else
+      while (start < end)
+        scanline[start++] = pixcol;
+#endif
+    }
+  }
 }
 
 // Renders all the available and enabled layers (in tiled mode).
@@ -1844,8 +1976,10 @@ void tile_render_layers(u32 start, u32 end, dsttype *dst_ptr, u32 enabled_layers
   u16 video_mode = dispcnt & 0x07;
   bool obj_enabled = (enabled_layers & 0x10);   // Objects are visible
 
-  bool objlayer_is_1st_tgt = ((read_ioreg(REG_BLDCNT) >> 4) & 1) != 0;
-  bool has_trans_obj = obj_alpha_count[read_ioreg(REG_VCOUNT)];
+  u16 bldcnt_tr = read_ioreg(REG_BLDCNT);
+  u32 vcnt_tr = read_ioreg(REG_VCOUNT);
+  bool objlayer_is_1st_tgt = ((bldcnt_tr >> 4) & 1) != 0;
+  bool has_trans_obj = obj_alpha_count[vcnt_tr];
 
   for (lnum = 0; lnum < layer_count; lnum++) {
     u32 layer = layer_order[lnum];
@@ -1868,7 +2002,7 @@ void tile_render_layers(u32 start, u32 end, dsttype *dst_ptr, u32 enabled_layers
       base_done = 1;
     }
     else if (!is_obj && ((1 << layer) & enabled_layers)) {
-      bool layer_is_1st_tgt = ((read_ioreg(REG_BLDCNT) >> layer) & 1) != 0;
+      bool layer_is_1st_tgt = ((bldcnt_tr >> layer) & 1) != 0;
       bool can_skip_blend = !has_trans_obj && !layer_is_1st_tgt;
 
       bool is_affine = (video_mode >= 1) && (layer >= 2);
@@ -1920,8 +2054,25 @@ static void render_w_effects(
   const layer_render_struct *renderers
 ) {
   bool effects_enabled = enable_flags & 0x20;   // Window bit for effects.
-  bool obj_blend = obj_alpha_count[read_ioreg(REG_VCOUNT)] > 0;
+  u32 vcnt_rw = read_ioreg(REG_VCOUNT);
+  bool obj_blend = obj_alpha_count[vcnt_rw] > 0;
   u16 bldcnt = read_ioreg(REG_BLDCNT);
+  u32 bldy_fx = read_ioreg(REG_BLDY) & 0x1F;
+  u32 bldalpha_fx = read_ioreg(REG_BLDALPHA);
+
+#ifdef NSPIRE_LIBRETRO
+  /* Host menu: skip PPU alpha / fade / brightness combine (see main.h). */
+  if (nspire_gba_blend_off) {
+    if (obj_blend) {
+      u32 tmp_buf[240];
+      renderers->stacked(start, end, tmp_buf, enable_flags);
+      merge_blend<OBJ_BLEND, true>(start, end, scanline, tmp_buf);
+    } else {
+      renderers->fullcolor(start, end, scanline, enable_flags);
+    }
+    return;
+  }
+#endif
 
   // If the window bits disable effects, default to NONE
   u32 effect_type = effects_enabled ? ((bldcnt >> 6) & 0x03)
@@ -1931,9 +2082,9 @@ static void render_w_effects(
   case COL_EFFECT_BRIGHT:
     {
       // If no layers are 1st target, no effect will really happen.
-      bool some_1st_tgt = (read_ioreg(REG_BLDCNT) & 0x3F) != 0;
+      bool some_1st_tgt = (bldcnt & 0x3F) != 0;
       // If the factor is zero, it's the same as "regular" rendering.
-      bool non_zero_blend = (read_ioreg(REG_BLDY) & 0x1F) != 0;
+      bool non_zero_blend = (bldy_fx != 0);
       if (some_1st_tgt && non_zero_blend) {
         if (obj_blend) {
           u32 tmp_buf[240];
@@ -1951,9 +2102,9 @@ static void render_w_effects(
   case COL_EFFECT_DARK:
     {
       // If no layers are 1st target, no effect will really happen.
-      bool some_1st_tgt = (read_ioreg(REG_BLDCNT) & 0x3F) != 0;
+      bool some_1st_tgt = (bldcnt & 0x3F) != 0;
       // If the factor is zero, it's the same as "regular" rendering.
-      bool non_zero_blend = (read_ioreg(REG_BLDY) & 0x1F) != 0;
+      bool non_zero_blend = (bldy_fx != 0);
       if (some_1st_tgt && non_zero_blend) {
         if (obj_blend) {
           u32 tmp_buf[240];
@@ -1971,10 +2122,10 @@ static void render_w_effects(
   case COL_EFFECT_BLEND:
     {
       // If no layers are 1st or 2nd target, no effect will really happen.
-      bool some_1st_tgt = (read_ioreg(REG_BLDCNT) & 0x003F) != 0;
-      bool some_2nd_tgt = (read_ioreg(REG_BLDCNT) & 0x3F00) != 0;
+      bool some_1st_tgt = (bldcnt & 0x003F) != 0;
+      bool some_2nd_tgt = (bldcnt & 0x3F00) != 0;
       // If 1st target is 100% opacity and 2nd is 0%, just render regularly.
-      bool non_trns_tgt = (read_ioreg(REG_BLDALPHA) & 0x1F1F) != 0x001F;
+      bool non_trns_tgt = (bldalpha_fx & 0x1F1F) != 0x001F;
       if (some_1st_tgt && some_2nd_tgt && non_trns_tgt) {
         u32 tmp_buf[240];
         renderers->stacked(start, end, tmp_buf, enable_flags);
@@ -2030,9 +2181,11 @@ static void bitmap_render_layers(
   u32 start, u32 end, dsttype *scanline, u32 enable_flags)
 {
   u16 dispcnt = read_ioreg(REG_DISPCNT);
-  bool has_trans_obj = obj_alpha_count[read_ioreg(REG_VCOUNT)];
-  bool objlayer_is_1st_tgt = (read_ioreg(REG_BLDCNT) & 0x10) != 0;
-  bool bg2_is_1st_tgt = (read_ioreg(REG_BLDCNT) & 0x4) != 0;
+  u32 vcnt_bm = read_ioreg(REG_VCOUNT);
+  u16 bldcnt_bm = read_ioreg(REG_BLDCNT);
+  bool has_trans_obj = obj_alpha_count[vcnt_bm];
+  bool objlayer_is_1st_tgt = (bldcnt_bm & 0x10) != 0;
+  bool bg2_is_1st_tgt = (bldcnt_bm & 0x4) != 0;
 
   // Fill in the renderers for a layer based on the mode type,
   static const bitmap_layer_render_struct renderers[3][2] =
@@ -2311,27 +2464,32 @@ void update_scanline(void)
 
   // Mode 0 does not use any affine params at all.
   if (video_mode) {
-    // Account for vertical mosaic effect, by correcting affine references.
     const u32 bgmosv = ((read_ioreg(REG_MOSAIC) >> 4) & 0xF) + 1;
+    u16 bg2cnt = read_ioreg(REG_BG2CNT);
+    u16 bg3cnt = read_ioreg(REG_BG3CNT);
+    s16 bg2pb = (s16)read_ioreg(REG_BG2PB);
+    s16 bg2pd = (s16)read_ioreg(REG_BG2PD);
+    s16 bg3pb = (s16)read_ioreg(REG_BG3PB);
+    s16 bg3pd = (s16)read_ioreg(REG_BG3PD);
 
-    if (read_ioreg(REG_BG2CNT) & 0x40) {   // Mosaic enabled for this BG
-      if ((vcount % bgmosv) == bgmosv-1) { // Correct after the last line
-        affine_reference_x[0] += (s16)read_ioreg(REG_BG2PB) * bgmosv;
-        affine_reference_y[0] += (s16)read_ioreg(REG_BG2PD) * bgmosv;
+    if (bg2cnt & 0x40) {   // Mosaic enabled for this BG
+      if (mosaic_umod_u32(vcount, bgmosv) == bgmosv - 1u) { // Correct after the last line
+        affine_reference_x[0] += bg2pb * (s32)bgmosv;
+        affine_reference_y[0] += bg2pd * (s32)bgmosv;
       }
     } else {
-      affine_reference_x[0] += (s16)read_ioreg(REG_BG2PB);
-      affine_reference_y[0] += (s16)read_ioreg(REG_BG2PD);
+      affine_reference_x[0] += bg2pb;
+      affine_reference_y[0] += bg2pd;
     }
 
-    if (read_ioreg(REG_BG3CNT) & 0x40) {
-      if ((vcount % bgmosv) == bgmosv-1) {
-        affine_reference_x[1] += (s16)read_ioreg(REG_BG3PB) * bgmosv;
-        affine_reference_y[1] += (s16)read_ioreg(REG_BG3PD) * bgmosv;
+    if (bg3cnt & 0x40) {
+      if (mosaic_umod_u32(vcount, bgmosv) == bgmosv - 1u) {
+        affine_reference_x[1] += bg3pb * (s32)bgmosv;
+        affine_reference_y[1] += bg3pd * (s32)bgmosv;
       }
     } else {
-      affine_reference_x[1] += (s16)read_ioreg(REG_BG3PB);
-      affine_reference_y[1] += (s16)read_ioreg(REG_BG3PD);
+      affine_reference_x[1] += bg3pb;
+      affine_reference_y[1] += bg3pd;
     }
   }
 }

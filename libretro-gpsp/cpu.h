@@ -156,7 +156,8 @@ extern u8 ram_translation_cache[RAM_TRANSLATION_CACHE_SIZE];
 extern u8 *rom_translation_ptr;
 extern u8 *ram_translation_ptr;
 
-#define MAX_TRANSLATION_GATES 8
+/* Room for gba_over.ini static gates plus lr-gpsp-amcc dynamic SMC gates */
+#define MAX_TRANSLATION_GATES 16
 
 extern u32 idle_loop_target_pc;
 extern u32 translation_gate_targets;
@@ -166,6 +167,13 @@ extern u32 rom_branch_hash[ROM_BRANCH_HASH_SIZE];
 
 void flush_translation_cache_rom(void);
 void flush_translation_cache_ram(void);
+#ifdef HAVE_DYNAREC
+void partial_flush_ram_full(u32 address);
+void partial_flush_ram_full_dma(u32 address);
+#else
+#define partial_flush_ram_full(addr)     ((void)(addr))
+#define partial_flush_ram_full_dma(addr) ((void)(addr))
+#endif
 void dump_translation_cache(void);
 void init_dynarec_caches(void);
 void flush_dynarec_caches(void);
@@ -183,5 +191,24 @@ void init_cpu(void);
 void move_reg();
 
 extern const u8 bit_count[256];
+
+#ifdef NSPIRE_LIBRETRO
+/* Non-NULL after init_emitter -> init_bios_hooks (first reset_gba / init_main).
+ * Menu must not call flush_dynarec_caches() before then: caches are not fully
+ * established and the Ndless device can hard-crash on I-cache / pointer state. */
+extern u8 *bios_swi_entrypoint;
+
+/* GBA PCs that block_lookup_translate_* can map to real JIT (not NULL, not the
+ * (u8*)~0 sentinel used for VRAM / I/O / etc.). Must match deferred backpatch
+ * selection and classic-mode gba_branch_emit_pc_relative_link in arm_emit.h. */
+#define GPSP_PC_RELATIVE_TRANS_REGION(pc)                                     \
+  (   ((pc) < 0x00004000u)                                                     \
+   || (((pc) >> 24) == 2 && ((pc) & 0xFFFFF) < 0x40000)                        \
+   || (((pc) >> 24) == 3 && ((pc) & 0xFFFF) < 0x8000)                        \
+   || (((pc) >> 24) >= 8 && ((pc) >> 24) <= 0x0D)                            \
+  )
+#define GPSP_TRANSLATION_TARGET_INVALID(p)                                    \
+  ((p) == NULL || (p) == (u8 *)(u32)-1)
+#endif
 
 #endif

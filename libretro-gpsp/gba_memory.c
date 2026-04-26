@@ -257,9 +257,11 @@ static void trigger_timer(u32 timer_number, u32 value)
 
          if(timer_number < 2)
          {
+            u32 td = cpu_ticks - gbc_sound_last_cpu_ticks;
             u32 buffer_adjust =
-               (u32)(((float)(cpu_ticks - gbc_sound_last_cpu_ticks) *
-                        sound_frequency) / GBC_BASE_RATE) * 2;
+               (u32)(((unsigned long long)td * (unsigned long long)GBA_SOUND_FREQUENCY) /
+                     (unsigned long long)GBC_BASE_RATE_INT) *
+               2u;
 
             sound_update_frequency_step(timer_number);
             adjust_sound_buffer(timer_number, 0);
@@ -1777,11 +1779,19 @@ const dma_region_type dma_region_map[17] =
 #define dma_read_ext(type, tfsize)                                            \
   read_value = read_memory##tfsize(type##_ptr)                                \
 
+/* SMC tags are u16; 8-bit DMA used to gate on address8() and could miss a tag
+ * with a zero low or high byte, skipping partial_flush and leaving stale JIT. */
 #define dma_write_iwram(type, tfsize)                                         \
-  address##tfsize(iwram + 0x8000, type##_ptr & 0x7FFF) =                      \
-                                          eswap##tfsize(read_value);          \
-  if (address##tfsize(iwram, type##_ptr & 0x7FFF))                            \
-    alerts |= CPU_ALERT_SMC;                                                  \
+  if (address##tfsize(iwram + 0x8000, type##_ptr & 0x7FFF) !=                  \
+      eswap##tfsize(read_value))                                              \
+  {                                                                           \
+    address##tfsize(iwram + 0x8000, type##_ptr & 0x7FFF) =                    \
+      eswap##tfsize(read_value);                                              \
+    if (*(u16 *)(iwram + ((type##_ptr & 0x7FFF) & ~1u)))                      \
+    {                                                                         \
+      partial_flush_ram_full_dma(type##_ptr);                                 \
+    }                                                                         \
+  }                                                                           \
 
 #define dma_write_vram(type, tfsize) {                                        \
   u32 wraddr = type##_ptr & 0x1FFFF;                                          \
@@ -1802,9 +1812,15 @@ const dma_region_type dma_region_map[17] =
   write_memory##tfsize(type##_ptr, read_value)                                \
 
 #define dma_write_ewram(type, tfsize)                                         \
-  address##tfsize(ewram, type##_ptr & 0x3FFFF) = eswap##tfsize(read_value);   \
-  if (address##tfsize(ewram, (type##_ptr & 0x3FFFF) + 0x40000))               \
-    alerts |= CPU_ALERT_SMC;                                                  \
+  if (address##tfsize(ewram, type##_ptr & 0x3FFFF) !=                        \
+      eswap##tfsize(read_value))                                              \
+  {                                                                           \
+    address##tfsize(ewram, type##_ptr & 0x3FFFF) = eswap##tfsize(read_value);  \
+    if (*(u16 *)(ewram + (((type##_ptr & 0x3FFFF) + 0x40000) & ~1u)))          \
+    {                                                                         \
+      partial_flush_ram_full_dma(type##_ptr);                                 \
+    }                                                                         \
+  }                                                                           \
 
 #define print_line()                                                          \
   dma_print(src_op, dest_op, tfsize);                                         \
@@ -2529,6 +2545,7 @@ unsigned memory_write_savestate(u8 *dst)
 static s32 load_gamepak_raw(const char *name)
 {
   unsigned i, j;
+  u32 active_entries;
   if (gamepak_file_large)
   {
     filestream_close(gamepak_file_large);
@@ -2538,6 +2555,19 @@ static s32 load_gamepak_raw(const char *name)
                                        RETRO_VFS_FILE_ACCESS_HINT_NONE);
   if(gamepak_file_large)
   {
+    /* New ROM load: drop previous game's page-cache/LRU metadata.
+     * Keeping stale phy_rom indices across ROM-size changes can cause
+     * map_rom_entry() to unmap using out-of-range indices later. */
+    for (i = 0; i < 1024; i++)
+    {
+      gamepak_blk_queue[i].next_lru = (u16)(i + 1);
+      gamepak_blk_queue[i].phy_rom = -1;
+    }
+    active_entries = gamepak_buffer_count * 32;
+    gamepak_lru_head = 0;
+    gamepak_lru_tail = (active_entries > 0) ? (active_entries - 1) : 0;
+    clear_gamepak_stickybits();
+
     // Round size to 32KB pages
     gamepak_size = (u32)filestream_get_size(gamepak_file_large);
     gamepak_size = (gamepak_size + 0x7FFF) & ~0x7FFF;

@@ -27,8 +27,11 @@
 
 #ifdef OVERCLOCK_60FPS
   #define GBC_BASE_RATE ((float)(60 * 228 * (272+960)))
+  #define GBC_BASE_RATE_INT (60u * 228u * (272u + 960u))
 #else
   #define GBC_BASE_RATE ((float)(16 * 1024 * 1024))
+  /* Integer Hz base matching GBC_BASE_RATE (for fixed-point audio timing). */
+  #define GBC_BASE_RATE_INT (16u * 1024u * 1024u)
 #endif
 
 #define DIRECT_SOUND_INACTIVE         0
@@ -99,6 +102,8 @@ extern u32 sound_on;
 
 void sound_timer_queue32(u32 channel, u32 value);
 unsigned sound_timer(fixed8_24 frequency_step, u32 channel);
+/* (tick_delta * GBA_SOUND_FREQUENCY / GBC_BASE) as fixed16_16; no float. */
+fixed16_16 sound_tick_delta_to_buffer_ticks(u32 tick_delta);
 void sound_reset_fifo(u32 channel);
 void render_gbc_sound();
 void init_sound();
