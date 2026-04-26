@@ -1,3 +1,7 @@
+.arch armv5te
+.cpu arm926ej-s
+.arm
+
 .align 2
 
 .global expand_blend
@@ -13,12 +17,20 @@
   .word io_registers
   .word palette_ram_converted
   .word 0x04000200                @ combine test mask
-  .word 0x03E07C1F                @ clamp mask
+#ifdef USE_XBGR1555_FORMAT
+  .word 0x03E07C1F                @ clamp mask (XBGR1555)
+#else
+  .word 0x07E0F81F                @ clamp mask (RGB565)
+#endif
   .word 0x000003FE                @ palette index mask
-  .word 0x04008020                @ saturation mask
+#ifdef USE_XBGR1555_FORMAT
+  .word 0x04008020                @ saturation mask (XBGR1555)
+#else
+  .word 0x08010020                @ saturation mask (RGB565)
+#endif
 
 expand_blend:
-  stmdb sp!, { r4, r5, r6, r9, r10, r11, r14 }
+  stmdb sp!, { r4, r5, r6, r7, r8, r9, r10, r11, r14 }
 
   add r0, r0, r2, lsl #2          @ screen_src_ptr += start
   add r1, r1, r2, lsl #1          @ screen_dest_ptr += start
@@ -35,7 +47,7 @@ expand_blend:
 
   ldr r14, 6b + 4                 @ r14 = palette_ram_converted
   ldr r12, 6b + 8                 @ r12 = 0x04000200
-  ldr r11, 6b + 12                @ r11 = 0x03E07C1F
+  ldr r11, 6b + 12                @ r11 = clamp mask
   ldr r10, 6b + 16                @ r10 = 0x000003FE
 
   add r5, r3, r4                  @ r5 = blend_a + blend_b
@@ -45,6 +57,7 @@ expand_blend:
 
   @ loop w/o saturation
 1:
+  pld     [r0, #32]
   ldr r5, [r0], #4                @ r5 = pixel_pair, screen_src_ptr++
   bics r6, r12, r5                @ if(0x04000200 & ~r5)
   bne 2f                          @   goto no_blend
@@ -64,14 +77,14 @@ expand_blend:
   mul r5, r4, r5                  @ r5 = pixel_bottom * blend_b = bottom_mul
   mla r5, r3, r6, r5              @ r5 = (pixel_top * blend_a) + bottom_mul
 
-  and r5, r11, r5, lsr #4         @ r5 = (color_dilated >> 4) & 0x03E07C1F
+  and r5, r11, r5, lsr #4         @ r5 = (color_dilated >> 4) & clamp mask
   orr r5, r5, r5, lsr #16         @ r5 = color_dilated | (color_dilated >> 16)
 
   strh r5, [r1], #2               @ *screen_dest_ptr = r5, screen_dest_ptr++
   subs r2, r2, #1                 @ counter--
   bne 1b                          @ go again
 
-  ldmia sp!, { r4, r5, r6, r9, r10, r11, pc }
+  ldmia sp!, { r4, r5, r6, r7, r8, r9, r10, r11, pc }
 
 2:
   and r5, r10, r5, lsl #1         @ r5 = (pixel_pair & 0x1FF) << 1
@@ -81,14 +94,15 @@ expand_blend:
   subs r2, r2, #1                 @ counter--
   bne 1b                          @ go again
 
-  ldmia sp!, { r4, r5, r6, r9, r10, r11, pc }
+  ldmia sp!, { r4, r5, r6, r7, r8, r9, r10, r11, pc }
 
 @ loop w/saturation
 
 3:
-  ldr r9, 6b + 20                 @ r9 = 0x04008020
+  ldr r9, 6b + 20                 @ r9 = saturation mask
 
 4:
+  pld     [r0, #32]
   ldr r5, [r0], #4                @ r5 = pixel_pair, screen_src_ptr++
   bics r6, r12, r5                @ if(0x04000200 & ~r5)
   bne 5f                          @   goto no_blend
@@ -108,21 +122,37 @@ expand_blend:
   mul r5, r4, r5                  @ r5 = pixel_bottom * blend_b = bottom_mul
   mla r5, r3, r6, r5              @ r5 = (pixel_top * blend_a) + bottom_mul
 
-  and r6, r9, r5, lsr #4          @ r6 = saturation bits
-  sub r6, r6, r6, lsr #5          @ Turn each instance of saturation into a 5-bit mask
-  @orr r6, r6, r6, lsr #1          @ propogate saturation down msb
-  @orr r6, r6, r6, lsr #2          @ propogate down next two bits
-  @orr r6, r6, r6, lsr #3          @ propogate down next three bits
-  orr r5, r6, r5, lsr #4          @ mask over result w/saturation
+  mov r6, r5, lsr #4              @ r6 = shifted blended color
+  and r5, r9, r6                  @ r5 = overflow bits
+#ifdef USE_XBGR1555_FORMAT
+  and r7, r5, #0x04000000         @ green overflow bit
+  sub r7, r7, r7, lsr #5          @ -> 0x03E00000 saturation mask
+  and r8, r5, #0x00008000         @ red overflow bit
+  sub r8, r8, r8, lsr #5          @ -> 0x00007C00 saturation mask
+  orr r7, r7, r8
+  and r8, r5, #0x00000020         @ blue overflow bit
+  sub r8, r8, r8, lsr #5          @ -> 0x0000001F saturation mask
+  orr r7, r7, r8
+#else
+  and r7, r5, #0x08000000         @ green overflow bit
+  sub r7, r7, r7, lsr #6          @ -> 0x07E00000 saturation mask (6-bit green)
+  and r8, r5, #0x00010000         @ red overflow bit
+  sub r8, r8, r8, lsr #5          @ -> 0x0000F800 saturation mask
+  orr r7, r7, r8
+  and r8, r5, #0x00000020         @ blue overflow bit
+  sub r8, r8, r8, lsr #5          @ -> 0x0000001F saturation mask
+  orr r7, r7, r8
+#endif
+  orr r5, r6, r7                  @ apply channel saturation bits
 
-  and r5, r11, r5                 @ r5 = (color_dilated >> 4) & 0x03E07C1F
+  and r5, r11, r5                 @ r5 = (color_dilated >> 4) & clamp mask
   orr r5, r5, r5, lsr #16         @ r5 = color_dilated | (color_dilated >> 16)
   strh r5, [r1], #2               @ *screen_dest_ptr = r5, screen_dest_ptr++
 
   subs r2, r2, #1                 @ counter--
   bne 4b                          @ go again
 
-  ldmia sp!, { r4, r5, r6, r9, r10, r11, pc }
+  ldmia sp!, { r4, r5, r6, r7, r8, r9, r10, r11, pc }
 
 5:
   and r5, r10, r5, lsl #1         @ r5 = (pixel_pair & 0x1FF) << 1
@@ -132,7 +162,7 @@ expand_blend:
   subs r2, r2, #1                 @ counter--
   bne 4b                          @ go again
 
-  ldmia sp!, { r4, r5, r6, r9, r10, r11, pc }
+  ldmia sp!, { r4, r5, r6, r7, r8, r9, r10, r11, pc }
 
 
 
@@ -168,6 +198,7 @@ expand_normal:
   ldr r3, 1b + 4                  @ r3 = 0x3FE
 
 2:
+  pld     [r0, #32]
   ldmia r0, { r4, r5, r6, r7 }
 
   expand_pixel_pair(r4, r14)

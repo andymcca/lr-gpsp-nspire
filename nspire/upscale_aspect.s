@@ -36,6 +36,10 @@
  * 24  25  26  27 : 28  29  30  31
  */
 
+.arch armv5te
+.cpu arm926ej-s
+.arm
+
 .macro unpack_hi dst, src
     mov     \dst, \src,       lsr #16
     orr     \dst, \dst, \dst, lsl #16
@@ -84,6 +88,10 @@ upscale_aspect:
 
     add     r0, r0, #320*2*13
 loop1:
+    @ Hint next source lines for sequential GBA->LCD read (CX DRAM latency).
+    pld     [r1, #0]
+    pld     [r1, #320*2]
+    pld     [r1, #(320*2*2)]
     ldr     r10,[r1]
     ldr     r11,[r1, #320*2*1]
 
@@ -330,6 +338,8 @@ loop_fast_1:
 	sub lr, lr, #(40 << 26) + 1
 loop_fast_2:
 	add r12, r1, #320*2
+	pld	[r1, #64]
+	pld	[r12, #64]
 	ldmia r12, {r6, r8, r9}
 	ldmia r1!, {r2, r4, r5}
 	
@@ -392,6 +402,7 @@ upscale_aspect_raw:
 loop_raw_1:
 	mov r11,#240/12
 loop_raw_2:
+	pld	[r1, #64]
 	ldmia r1!,{r2,r4,r5,r6,r8,r9}
 	mov r3,r2,lsr #16
 	orr r3,r3,r4,lsl #16
@@ -409,6 +420,7 @@ loop_raw_2:
 	
 	mov r11,#240/12
 loop_raw_3:
+	pld	[r1, #64]
 	ldmia r1!,{r2,r4,r5,r6,r8,r9}
 	mov r3,r2,lsr #16
 	orr r3,r3,r4,lsl #16
@@ -429,6 +441,7 @@ loop_raw_3:
 	add r12,r0,#320*2
 	mov r11,#240/12
 loop_raw_4:
+	pld	[r1, #64]
 	ldmia r1!,{r2,r4,r5,r6,r8,r9}
 	mov r3,r2,lsr #16
 	orr r3,r3,r4,lsl #16

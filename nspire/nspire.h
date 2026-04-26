@@ -12,6 +12,9 @@
 #define WOP_D_CLEAN 0
 #define WOP_I_INVALIDATE 1
 
+/* RGB565 full LCD back buffer (matches extra_screen_*); D-clean range before display swap. */
+#define NSPIRE_LCD_FB_SIZE_BYTES ((unsigned long)(320 * 240 * 2))
+
 extern void* nspire_screen;
 extern void* nspire_screen_2;
 extern void* nspire_screen_3;
@@ -22,6 +25,9 @@ void nspire_restore();
 void set_display_buffer(void* buffer);
 void update_at_vblank();
 
+/* Coherent LCD framebuffer before triple-buffer swap (range vs full D-cache clean). */
+void nspire_lcd_fb_cache_clean_for_display(void);
+
 int warm_cache_op_range(int op, void *addr, unsigned long size);
 void clean_dcache(void);
 void nspire_jit_cache_sync(void *base, void *end);
@@ -31,6 +37,8 @@ struct tm* localtime(const time_t*);
 void upscale_aspect(u16 *dst, u16 *src);
 void upscale_aspect_fast(u16 *dst, u16 *src);
 void upscale_aspect_raw(u16 *dst, u16 *src);
+/* Fused libretro RGB565 repack + raw upscale (no nspire_upscale_src pass). */
+void upscale_aspect_raw_from_gba(u16 *dst, const u16 *gba);
 
 void enableAlignmentExceptions();
 u32 menu_wrapper(u16*);

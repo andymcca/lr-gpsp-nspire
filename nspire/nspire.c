@@ -50,11 +50,35 @@ void set_display_buffer(void* buffer)
 	*(volatile void**)0xC0000010 = buffer;
 }
 
-void update_at_vblank()
+void update_at_vblank(void)
 {
-	while((*(volatile unsigned*)0xC0000020 & 4) == 0) { }
-	*(volatile unsigned*)0xC0000028 = 4;
+#if defined(NSPIRE_LIBRETRO)
+	/* Fast forward (synchronize_flag==0): do not pace the emulation thread to the
+	 * real LCD; original NSPIRE gpSP skipped this wait in synchronize(). We still
+	 * ack line status and publish the back buffer so the panel state stays coherent. */
+	if (synchronize_flag)
+#endif
+	{
+		while ((*(volatile unsigned *)0xC0000020 & 4) == 0)
+		{
+		}
+	}
+	*(volatile unsigned *)0xC0000028 = 4;
 	set_display_buffer(nspire_displayed_screen);
+}
+
+#if defined(NSPIRE_LIBRETRO)
+extern u32 nspire_lcd_cache_clean_full;
+#endif
+
+void nspire_lcd_fb_cache_clean_for_display(void)
+{
+#if defined(NSPIRE_LIBRETRO)
+	if (nspire_lcd_cache_clean_full)
+		clean_dcache();
+	else
+#endif
+		warm_cache_op_range(WOP_D_CLEAN, nspire_screen, NSPIRE_LCD_FB_SIZE_BYTES);
 }
 
 //#define VERY_SAFE_CACHE
