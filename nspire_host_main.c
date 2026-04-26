@@ -228,12 +228,6 @@ static void capture_initial_sp(void)
   not_crt0_savedsp = (uint32_t)sp;
 }
 
-static void synchronize_nspire(void)
-{
-  if (synchronize_flag)
-    msleep(8);
-}
-
 void nspire_bios_error_wait(const char *msg)
 {
   gui_action_type gui_action = CURSOR_NONE;
@@ -308,7 +302,6 @@ static void emulation_loop(void)
     process_cheats();
     nspire_present_frame(skip_next_frame);
     update_backup();
-    synchronize_nspire();
 
     switch (serial_mode)
     {

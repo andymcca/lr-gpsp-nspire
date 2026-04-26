@@ -195,7 +195,7 @@ void flip_screen(void)
     else
       upscale_aspect(nspire_screen, screen_pixels);
   }
-  clean_dcache();
+  nspire_lcd_fb_cache_clean_for_display();
   {
     void *temp = nspire_displayed_screen;
     nspire_displayed_screen = nspire_screen;

@@ -1057,19 +1057,27 @@ s32 load_config_file()
     u32 file_size = file_length(config_path, config_file);
 
     // Sanity check: file sizes by feature growth:
-    // 96 = +BIOS, 112 = +frameskip, 124 = +emulator options, 128 = +ROM buffer size.
+    // 96 = +BIOS, 112 = +frameskip, 124 = +emulator options, 128 = +ROM buffer size,
+    // 132 = +LCD cache mode, 136 = +FPS overlay, 140 = +GBA blend skip, 144 = +dynarec SMC policy,
+    // 148 = legacy (extra u32 for removed RAM block reuse option; ignored), 152 = +video renderer.
     if(file_size == 92
 #if defined(NSPIRE_LIBRETRO)
      || file_size == 96
      || file_size == 112
      || file_size == 124
      || file_size == 128
+     || file_size == 132
+     || file_size == 136
+     || file_size == 140
+     || file_size == 144
+     || file_size == 148
+     || file_size == 152
 #endif
      )
     {
       u32 words = file_size / 4;
 #if defined(NSPIRE_LIBRETRO)
-      u32 file_options[32];
+      u32 file_options[38];
 #else
       u32 file_options[28];
 #endif
@@ -1167,6 +1175,26 @@ s32 load_config_file()
         nspire_rom_buffer_size_choice = file_options[31];
       else
         nspire_rom_buffer_size_choice = 8;
+      if (words >= 33)
+        nspire_lcd_cache_clean_full = file_options[32] % 2;
+      else
+        nspire_lcd_cache_clean_full = 0;
+      if (words >= 34)
+        nspire_fps_overlay = file_options[33] % 2;
+      else
+        nspire_fps_overlay = 0;
+      if (words >= 35)
+        nspire_gba_blend_off = file_options[34] % 2;
+      else
+        nspire_gba_blend_off = 0;
+      if (words >= 36)
+        nspire_dynarec_ram_policy = file_options[35] % 2;
+      else
+        nspire_dynarec_ram_policy = 0;
+      if (words >= 37)
+        nspire_video_renderer_choice = file_options[36] % 2;
+      else
+        nspire_video_renderer_choice = 0;
       nspire_clamp_rom_buffer_size();
       nspire_emulator_options_apply();
 #endif
@@ -1255,7 +1283,7 @@ s32 save_config_file()
   if(file_check_valid(config_file))
   {
 #if defined(NSPIRE_LIBRETRO)
-    u32 file_options[32];
+    u32 file_options[37];
 #else
     u32 file_options[23];
 #endif
@@ -1287,7 +1315,12 @@ s32 save_config_file()
     file_options[29] = nspire_rtc_choice % 3;
     file_options[30] = nspire_frame_mix_choice % 2;
     file_options[31] = nspire_rom_buffer_size_choice;
-    file_write(config_file, file_options, 32 * sizeof(u32));
+    file_options[32] = nspire_lcd_cache_clean_full % 2;
+    file_options[33] = nspire_fps_overlay % 2;
+    file_options[34] = nspire_gba_blend_off % 2;
+    file_options[35] = nspire_dynarec_ram_policy % 2;
+    file_options[36] = nspire_video_renderer_choice % 2;
+    file_write(config_file, file_options, 37 * sizeof(u32));
 #else
     file_write_array(config_file, file_options);
 #endif
@@ -1715,7 +1748,7 @@ u32 menu(u16 *original_screen)
 
   void submenu_about()
   {
-    print_string("gpsp-libretro for nSpire (Alpha v0.2)", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 10);
+    print_string("gpsp-libretro for nSpire (Alpha v0.4)", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 10);
     print_string("by andymcca", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 20);
     print_string("Credits:", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 90);
     print_string("Exophase", COLOR_INACTIVE_ITEM, COLOR_BG, 10, 100);
@@ -1739,7 +1772,7 @@ u32 menu(u16 *original_screen)
 	}
 	else
 	{
-		print_string("gpsp-libretro for nspire (Alpha v0.2)",
+		print_string("gpsp-libretro for nspire (Alpha v0.4)",
 		 COLOR_ACTIVE_ITEM, COLOR_BG, 10, 10);
 	}
   }
@@ -1760,6 +1793,11 @@ u32 menu(u16 *original_screen)
   u8 *nspire_sprlim_options[] = { "disabled", "enabled" };
   u8 *nspire_rtc_options[] = { "auto", "enabled", "disabled" };
   u8 *nspire_frame_mix_options[] = { "disabled", "enabled" };
+  u8 *nspire_lcd_cache_options[] = { "Range D-clean", "Full clean_dcache" };
+  u8 *nspire_fps_overlay_options[] = { "Off", "On" };
+  u8 *nspire_gba_blend_options[] = { "On", "Off (fast)" };
+  u8 *nspire_video_renderer_options[] = { "libretro video.cc", "legacy old_video/video.c" };
+  u8 *nspire_dynarec_ram_policy_options[] = { "Partial SMC (default)", "Classic (full flush on SMC)" };
 #endif
 
 #ifndef PSP_BUILD
@@ -1837,6 +1875,25 @@ u32 menu(u16 *original_screen)
     string_selection_option(NULL, "Frameskip variation",
      frameskip_variation_options, &random_skip, 2,
      "Random timing for manual skip can reduce flicker beat with manual.", 7),
+#if defined(NSPIRE_LIBRETRO)
+    string_selection_option(NULL, "LCD framebuffer cache",
+     nspire_lcd_cache_options, &nspire_lcd_cache_clean_full, 2,
+     "Before the display swap: range D-clean of the 320x240 RGB buffer (fast),\n"
+     "or full clean_dcache if you see corruption or want to compare.", 8),
+    string_selection_option(NULL, "Show FPS counter",
+     nspire_fps_overlay_options, &nspire_fps_overlay, 2,
+     "Draws actual/expected visible FPS (e.g. 16/20) after scaling.\n"
+     "Expected follows frameskip (manual uses ~60/(N+1); auto uses ~60).\n"
+     "Timing from hardware; may be coarse on some models.", 9),
+    string_selection_option(NULL, "GBA blending (BLDCNT)",
+     nspire_gba_blend_options, &nspire_gba_blend_off, 2,
+     "On: accurate alpha between layers, fades, and semi-transparent OBJ.\n"
+     "Off (fast): skips those passes (modes 0-2 and 4 only); wrong in many games.", 10),
+    string_selection_option(NULL, "Video renderer",
+     nspire_video_renderer_options, &nspire_video_renderer_choice, 2,
+     "libretro video.cc is the default renderer.\n"
+     "legacy old_video/video.c can be faster in some scenes and uses video_blend.S.", 11),
+#endif
 #elif !defined(GP2X_BUILD)
     string_selection_option(NULL, "Frameskip type", frameskip_options,
      (u32 *)(&current_frameskip_type), 3,
@@ -1998,7 +2055,12 @@ u32 menu(u16 *original_screen)
      &nspire_frame_mix_choice, 2,
      "gpsp_frame_mixing: blends this frame with the previous one\n"
      "(LCD-style ghosting).", 6),
-    submenu_option(NULL, "Back", "Return to the main menu.", 12)
+    string_selection_option(nspire_dynarec_ram_policy_menu_hook, "Dynarec RAM / SMC",
+     nspire_dynarec_ram_policy_options, &nspire_dynarec_ram_policy, 2,
+     "Partial SMC: only invalidate affected RAM code (faster).\n"
+     "Classic: flush ROM+RAM dynarec on SMC and use full block linking\n"
+     "(ROM/ RAM targets) like non-RAM blocks; slower but matches old gpSP.", 7),
+    submenu_option(NULL, "Back", "Return to the main menu.", 13)
   };
 
   make_menu(emulator, submenu_emulator, NULL);
@@ -2097,8 +2159,8 @@ u32 menu(u16 *original_screen)
   {
 #ifdef NSPIRE_BUILD
 	submenu_option(&graphics_sound_menu, "Graphics options",
-     "Select to set display scale size and\n"
-     "frameskip behavior.", 0),
+     "Select to set display scale, frameskip,\n"
+     "LCD cache, FPS overlay, blending, and renderer.", 0),
 #if defined(NSPIRE_LIBRETRO)
 	submenu_option(&emulator_menu, "Emulator options",
      "BIOS, sprite limit, RTC, and interframe blending.", 1),

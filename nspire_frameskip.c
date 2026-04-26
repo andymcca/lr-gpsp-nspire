@@ -1,4 +1,6 @@
-/* Nspire gpSP-style frameskip: auto (relative_frame_count), manual, off — no audio buffer. */
+/* Nspire gpSP-style frameskip: auto (relative_frame_count), manual, off — no audio buffer.
+ * relative_frame_count is advanced in update_gba() when the real LCD is in vblank
+ * (libretro-gpsp/main.c), capped for auto so “ahead” heat scales with the GUI max. */
 
 #include "common.h"
 #include "main.h"
@@ -45,8 +47,9 @@ void nspire_frameskip_begin_frame(void)
   }
   else
   {
-    if (synchronize_flag)
-      while ((*(volatile unsigned *)0xC0000020 & 4) == 0) { }
+    /* Present path paces to the panel via update_at_vblank() when synchronize_flag
+     * is set; no wait here (avoids double-wait). When synchronize_flag is clear (FF),
+     * update_at_vblank() skips the LCD spin. */
   }
 
   if (current_frameskip_type == manual_frameskip)
