@@ -25,6 +25,77 @@
 extern u32 nspire_rom_buffer_size_choice;
 #endif
 
+#ifdef NSPIRE_NO_AUDIO
+/*
+ * Nspire has no speaker output. NSPIRE_NO_AUDIO already makes render_gbc_sound()
+ * and sound_timer() skip mixing; games still touch sound MMIO and timers.
+ * Replace runtime double math in these paths with integer-fixed equivalents
+ * (GBC tone steps cancel sound_frequency; timer step uses GBC_BASE_RATE_INT).
+ */
+#define NSPIRE_FP16_ONE_TWELFTH ((fixed16_16)(65536u / 12u))
+
+static inline fixed16_16 nspire_fp16_tone_square_channel(u32 rate)
+{
+  u32 den = 2048u - (rate & 2047u);
+  if (den == 0u)
+    den = 1u;
+  return (fixed16_16)(1048576u / den);
+}
+
+static inline fixed16_16 nspire_fp16_tone_wave_channel(u32 rate)
+{
+  u32 den = 2048u - (rate & 2047u);
+  if (den == 0u)
+    den = 1u;
+  return (fixed16_16)(2097152u / den);
+}
+
+static inline fixed16_16 nspire_fp16_noise_step(u32 dividing_ratio, u32 frequency_shift)
+{
+  u32 sh = (frequency_shift & 15u) + 1u;
+  u32 divisor = 1u << sh;
+
+  if (dividing_ratio == 0u)
+    return (fixed16_16)(1048576u / divisor);
+  return (fixed16_16)(524288u / (dividing_ratio * divisor));
+}
+
+static inline fixed8_24 nspire_fp8_timer_reload_step(u32 timer_reload)
+{
+  unsigned long long num;
+
+  if (timer_reload == 0u)
+    return (fixed8_24)0;
+  /* Same as float_to_fp8_24((GBC_BASE_RATE / sound_frequency) / timer_reload). */
+  num = (unsigned long long)GBC_BASE_RATE_INT * 16777216ull /
+        (unsigned long long)GBA_SOUND_FREQUENCY;
+  return (fixed8_24)(num / (unsigned long long)timer_reload);
+}
+
+#define gbc_fp16_tone_square(rate)     nspire_fp16_tone_square_channel(rate)
+#define gbc_fp16_tone_wave(rate)       nspire_fp16_tone_wave_channel(rate)
+#define gbc_fp16_noise(dr, fs)         nspire_fp16_noise_step((dr), (fs))
+#define gbc_fp16_sample_phase12()      NSPIRE_FP16_ONE_TWELFTH
+#define sound_update_frequency_step(timer_number)                             \
+  timer[timer_number].frequency_step = nspire_fp8_timer_reload_step(timer_reload)
+#else
+#define gbc_fp16_tone_square(rate)                                            \
+  float_to_fp16_16(((131072.0 / (2048 - (rate))) * 8.0) / sound_frequency)
+#define gbc_fp16_tone_wave(rate)                                              \
+  float_to_fp16_16((2097152.0 / (2048 - (rate))) / sound_frequency)
+#define gbc_fp16_noise(dividing_ratio, frequency_shift)                       \
+  ((dividing_ratio) == 0                                                      \
+     ? float_to_fp16_16(1048576.0 / (1 << ((frequency_shift) + 1)) /          \
+                        sound_frequency)                                      \
+     : float_to_fp16_16(524288.0 / ((dividing_ratio) *                         \
+                                   (1 << ((frequency_shift) + 1))) /          \
+                        sound_frequency))
+#define gbc_fp16_sample_phase12()      float_to_fp16_16(1.0 / 12.0)
+#define sound_update_frequency_step(timer_number)                             \
+  timer[timer_number].frequency_step =                                        \
+   float_to_fp8_24((GBC_BASE_RATE / sound_frequency) / (timer_reload))
+#endif /* NSPIRE_NO_AUDIO */
+
 /* Sound */
 #define gbc_sound_tone_control_low(channel, regn)                             \
 {                                                                             \
@@ -48,13 +119,12 @@ extern u32 nspire_rom_buffer_size_choice;
   render_gbc_sound();                                                         \
   u32 rate = value & 0x7FF;                                                   \
   gbc_sound_channel[channel].rate = rate;                                     \
-  gbc_sound_channel[channel].frequency_step =                                 \
-   float_to_fp16_16(((131072.0 / (2048 - rate)) * 8.0) / sound_frequency);    \
+  gbc_sound_channel[channel].frequency_step = gbc_fp16_tone_square(rate);     \
   gbc_sound_channel[channel].length_status = (value >> 14) & 0x01;            \
   if(value & 0x8000)                                                          \
   {                                                                           \
     gbc_sound_channel[channel].active_flag = 1;                               \
-    gbc_sound_channel[channel].sample_index -= float_to_fp16_16(1.0 / 12.0);  \
+    gbc_sound_channel[channel].sample_index -= gbc_fp16_sample_phase12();     \
     gbc_sound_channel[channel].envelope_ticks =                               \
      gbc_sound_channel[channel].envelope_initial_ticks;                       \
     gbc_sound_channel[channel].envelope_volume =                              \
@@ -108,8 +178,7 @@ static const u32 gbc_sound_wave_volume[4] = { 0, 16384, 8192, 4096 };
   render_gbc_sound();                                                         \
   u32 rate = value & 0x7FF;                                                   \
   gbc_sound_channel[2].rate = rate;                                           \
-  gbc_sound_channel[2].frequency_step =                                       \
-   float_to_fp16_16((2097152.0 / (2048 - rate)) / sound_frequency);           \
+  gbc_sound_channel[2].frequency_step = gbc_fp16_tone_wave(rate);             \
   gbc_sound_channel[2].length_status = (value >> 14) & 0x01;                  \
   if(value & 0x8000)                                                          \
   {                                                                           \
@@ -124,18 +193,8 @@ static const u32 gbc_sound_wave_volume[4] = { 0, 16384, 8192, 4096 };
   u32 dividing_ratio = value & 0x07;                                          \
   u32 frequency_shift = (value >> 4) & 0x0F;                                  \
   render_gbc_sound();                                                         \
-  if(dividing_ratio == 0)                                                     \
-  {                                                                           \
-    gbc_sound_channel[3].frequency_step =                                     \
-     float_to_fp16_16(1048576.0 / (1 << (frequency_shift + 1)) /              \
-     sound_frequency);                                                        \
-  }                                                                           \
-  else                                                                        \
-  {                                                                           \
-    gbc_sound_channel[3].frequency_step =                                     \
-     float_to_fp16_16(524288.0 / (dividing_ratio *                            \
-     (1 << (frequency_shift + 1))) / sound_frequency);                        \
-  }                                                                           \
+  gbc_sound_channel[3].frequency_step =                                       \
+   gbc_fp16_noise(dividing_ratio, frequency_shift);                           \
   gbc_sound_channel[3].noise_type = (value >> 3) & 0x01;                      \
   gbc_sound_channel[3].length_status = (value >> 14) & 0x01;                  \
   if(value & 0x8000)                                                          \
@@ -205,10 +264,6 @@ static void sound_control_x(u32 value)
    value = (value & 0xFFF0) | (read_ioreg(REG_SOUNDCNT_X) & 0x000F);
    write_ioreg(REG_SOUNDCNT_X, value);
 }
-
-#define sound_update_frequency_step(timer_number)                             \
-  timer[timer_number].frequency_step =                                        \
-   float_to_fp8_24((GBC_BASE_RATE / sound_frequency) / (timer_reload))        \
 
 /* Main */
 extern timer_type timer[4];

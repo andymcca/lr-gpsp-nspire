@@ -2557,6 +2557,15 @@ inline static ramtag_type* get_ram_tag(u16 tagval) {
   u32 thumb = 1;                                                              \
   pc &= ~0x01                                                                 \
 
+#if defined(NSPIRE_LIBRETRO)
+static int nspire_reuse_tl_depth;
+static void nspire_ram_reuse_invalidate(void);
+static bool nspire_ram_reuse_lookup_arm(u32 pc, u32 *native_off_out);
+static bool nspire_ram_reuse_lookup_thumb(u32 pc, u32 *native_off_out);
+static void nspire_ram_reuse_register_arm(u32 block_start_pc, u32 block_end_pc, u32 native_off);
+static void nspire_ram_reuse_register_thumb(u32 block_start_pc, u32 block_end_pc, u32 native_off);
+#endif
+
 
 #define block_lookup_translate_builder(type)                                  \
 u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
@@ -2587,9 +2596,17 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
                                                                               \
       if (!trentry->offset_##type) {                                          \
         bool result;                                                          \
-        u8 *blkptr = ram_translation_ptr + block_prologue_size;               \
+        u8 *blkptr;                                                           \
+        u32 nspire_reuse_hit = 0;                                             \
+        if (nspire_ram_reuse_lookup_##type(pc, &nspire_reuse_hit)) {            \
+          trentry->offset_##type = nspire_reuse_hit;                           \
+          return ram_translation_cache + nspire_reuse_hit;                  \
+        }                                                                     \
+        blkptr = ram_translation_ptr + block_prologue_size;                 \
         trentry->offset_##type = blkptr - ram_translation_cache;              \
+        nspire_reuse_tl_depth++;                                              \
         result = translate_block_##type(pc, true);                              \
+        nspire_reuse_tl_depth--;                                              \
                                                                               \
         if (result)                                                           \
           return blkptr;                                                      \
@@ -3069,6 +3086,329 @@ if (ram_region) {                                                             \
   }                                                                           \
 }                                                                             \
 
+#if defined(NSPIRE_LIBRETRO)
+/* RAM block reuse: same GBA PC + opcode bytes + generation -> existing native
+ * offset. Lookup only at translate depth 0 (never during nested translate)
+ * so scan_block never clobbers live block_data. Invalidated on RAM flush,
+ * dynarec init, and partial SMC when reuse is enabled. */
+
+#define NSPIRE_REUSE_HASH_SIZE 65536u
+#define NSPIRE_REUSE_ARENA_BYTES (384u * 1024u)
+#define NSPIRE_REUSE_MAX_OPC 1024u /* same as MAX_BLOCK_SIZE below */
+
+typedef struct NspireRamReuseNode {
+  struct NspireRamReuseNode *next;
+  u32 pc;
+  u32 code_size;
+  u32 gen;
+  u32 native_off;
+  u32 thumb_mode;
+} NspireRamReuseNode;
+
+static NspireRamReuseNode *nspire_reuse_heads[NSPIRE_REUSE_HASH_SIZE];
+static u8 nspire_reuse_arena[NSPIRE_REUSE_ARENA_BYTES];
+static u32 nspire_reuse_arena_pos;
+static u32 nspire_ram_reuse_generation = 1;
+
+static void nspire_ram_reuse_invalidate(void)
+{
+  memset(nspire_reuse_heads, 0, sizeof(nspire_reuse_heads));
+  nspire_reuse_arena_pos = 0;
+  nspire_ram_reuse_generation++;
+  if (nspire_ram_reuse_generation == 0u)
+    nspire_ram_reuse_generation = 1u;
+}
+
+static void *nspire_reuse_arena_alloc(u32 nbytes)
+{
+  u32 n = (nbytes + 3u) & ~3u;
+  if (nspire_reuse_arena_pos + n > NSPIRE_REUSE_ARENA_BYTES)
+    return NULL;
+  {
+    void *p = nspire_reuse_arena + nspire_reuse_arena_pos;
+    nspire_reuse_arena_pos += n;
+    return p;
+  }
+}
+
+static u16 nspire_reuse_cksum_arm(const u32 *w, s32 n)
+{
+  u32 r = ~w[0];
+  s32 j;
+  for (j = 1; j < n; j++)
+    r ^= w[j] >> (j & 7);
+  return (u16)(((r >> 16) ^ r) & 0xFFFEu);
+}
+
+static u16 nspire_reuse_cksum_thumb(const u16 *h, s32 n)
+{
+  u16 r = (u16)~h[0];
+  s32 j;
+  for (j = 1; j < n; j++)
+    r ^= (u16)(h[j] >> (j & 7));
+  return (u16)(r | 1u);
+}
+
+static void nspire_reuse_read_arm_words(u32 start_pc, u32 end_pc, u32 *out,
+    s32 *out_nwords)
+{
+  u32 pc_region = start_pc >> 15;
+  u32 new_pc_region;
+  u8 *pc_address_block = memory_map_read[pc_region];
+  u32 apc;
+  s32 n = 0;
+  s32 nmax = (s32)((end_pc - start_pc) / 4);
+
+  if (nmax <= 0 || (u32)nmax > NSPIRE_REUSE_MAX_OPC)
+  {
+    *out_nwords = 0;
+    return;
+  }
+
+  if (!pc_address_block)
+    pc_address_block = load_gamepak_page(pc_region & 0x3FF);
+
+  for (apc = start_pc; apc < end_pc; apc += 4)
+  {
+    new_pc_region = apc >> 15;
+    if (new_pc_region != pc_region)
+    {
+      pc_region = new_pc_region;
+      pc_address_block = memory_map_read[pc_region];
+      if (!pc_address_block)
+        pc_address_block = load_gamepak_page(pc_region & 0x3FF);
+    }
+    out[n++] = address32(pc_address_block, apc & 0x7FFF);
+  }
+  *out_nwords = n;
+}
+
+static void nspire_reuse_read_thumb_halfwords(u32 start_pc, u32 end_pc,
+    u16 *out, s32 *out_nh)
+{
+  u32 pc_region = start_pc >> 15;
+  u32 new_pc_region;
+  u8 *pc_address_block = memory_map_read[pc_region];
+  u32 apc;
+  s32 n = 0;
+  s32 nmax = (s32)((end_pc - start_pc) / 2);
+
+  if (nmax <= 0 || (u32)nmax > NSPIRE_REUSE_MAX_OPC)
+  {
+    *out_nh = 0;
+    return;
+  }
+
+  if (!pc_address_block)
+    pc_address_block = load_gamepak_page(pc_region & 0x3FF);
+
+  for (apc = start_pc; apc < end_pc; apc += 2)
+  {
+    new_pc_region = apc >> 15;
+    if (new_pc_region != pc_region)
+    {
+      pc_region = new_pc_region;
+      pc_address_block = memory_map_read[pc_region];
+      if (!pc_address_block)
+        pc_address_block = load_gamepak_page(pc_region & 0x3FF);
+    }
+    out[n++] = address16(pc_address_block, apc & 0x7FFF);
+  }
+  *out_nh = n;
+}
+
+static bool nspire_ram_reuse_lookup_arm(u32 pc, u32 *native_off_out)
+{
+  u32 opcode = 0, last_opcode, condition, last_condition;
+  u32 pc_region = (pc >> 15);
+  u32 new_pc_region;
+  u8 *pc_address_block = memory_map_read[pc_region];
+  u32 block_start_pc;
+  u32 block_end_pc;
+  u32 block_exit_position = 0;
+  s32 block_data_position = 0;
+  u32 branch_target;
+  u32 cycle_count = 0;
+  s32 i;
+  u32 opc_buf[1024];
+  s32 nwords;
+  u16 h;
+
+  if (nspire_dynarec_ram_policy || !nspire_dynarec_block_reuse
+      || nspire_reuse_tl_depth != 0)
+    return false;
+
+  generate_block_extra_vars_arm();
+  pc &= ~0x03u;
+  block_start_pc = pc;
+  block_end_pc = pc;
+
+  if (!pc_address_block)
+    pc_address_block = load_gamepak_page(pc_region & 0x3FF);
+
+  scan_block(arm, yes);
+
+  if (block_data_position <= 0)
+    return false;
+
+  nspire_reuse_read_arm_words(block_start_pc, block_end_pc, opc_buf, &nwords);
+  if (nwords <= 0 || nwords != block_data_position)
+    return false;
+
+  h = nspire_reuse_cksum_arm(opc_buf, nwords);
+  {
+    NspireRamReuseNode *p;
+    u32 b = (u32)h & (NSPIRE_REUSE_HASH_SIZE - 1u);
+
+    for (p = nspire_reuse_heads[b]; p; p = p->next)
+    {
+      if (p->gen != nspire_ram_reuse_generation || p->thumb_mode != 0u)
+        continue;
+      if (p->pc != block_start_pc || p->code_size != (u32)(block_end_pc - block_start_pc))
+        continue;
+      if (memcmp((u8 *)(p + 1), opc_buf, (size_t)(block_end_pc - block_start_pc)) == 0)
+      {
+        *native_off_out = p->native_off;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+static bool nspire_ram_reuse_lookup_thumb(u32 pc, u32 *native_off_out)
+{
+  u32 opcode = 0, last_opcode, condition;
+  u32 pc_region = (pc >> 15);
+  u32 new_pc_region;
+  u8 *pc_address_block = memory_map_read[pc_region];
+  u32 block_start_pc;
+  u32 block_end_pc;
+  u32 block_exit_position = 0;
+  s32 block_data_position = 0;
+  u32 branch_target;
+  u32 cycle_count = 0;
+  s32 i;
+  u16 opc_buf[1024];
+  s32 nh;
+  u16 h;
+
+  if (nspire_dynarec_ram_policy || !nspire_dynarec_block_reuse
+      || nspire_reuse_tl_depth != 0)
+    return false;
+
+  generate_block_extra_vars_thumb();
+  pc &= ~1u;
+  block_start_pc = pc;
+  block_end_pc = pc;
+
+  if (!pc_address_block)
+    pc_address_block = load_gamepak_page(pc_region & 0x3FF);
+
+  scan_block(thumb, yes);
+
+  if (block_data_position <= 0)
+    return false;
+
+  nspire_reuse_read_thumb_halfwords(block_start_pc, block_end_pc, opc_buf, &nh);
+  if (nh <= 0 || nh != block_data_position)
+    return false;
+
+  h = nspire_reuse_cksum_thumb(opc_buf, nh);
+  {
+    NspireRamReuseNode *p;
+    u32 b = (u32)h & (NSPIRE_REUSE_HASH_SIZE - 1u);
+
+    for (p = nspire_reuse_heads[b]; p; p = p->next)
+    {
+      if (p->gen != nspire_ram_reuse_generation || p->thumb_mode != 1u)
+        continue;
+      if (p->pc != block_start_pc || p->code_size != (u32)(block_end_pc - block_start_pc))
+        continue;
+      if (memcmp((u8 *)(p + 1), opc_buf, (size_t)(block_end_pc - block_start_pc)) == 0)
+      {
+        *native_off_out = p->native_off;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+static void nspire_ram_reuse_register_arm(u32 block_start_pc, u32 block_end_pc,
+    u32 native_off)
+{
+  u32 opc_buf[1024];
+  s32 nwords;
+  u32 cs = block_end_pc - block_start_pc;
+  NspireRamReuseNode *node;
+  u8 *payload;
+  u16 h;
+  u32 b;
+
+  if (nspire_dynarec_ram_policy || !nspire_dynarec_block_reuse || cs == 0u)
+    return;
+
+  nspire_reuse_read_arm_words(block_start_pc, block_end_pc, opc_buf, &nwords);
+  if (nwords <= 0 || (u32)(nwords * 4) != cs)
+    return;
+
+  h = nspire_reuse_cksum_arm(opc_buf, nwords);
+  b = (u32)h & (NSPIRE_REUSE_HASH_SIZE - 1u);
+
+  node = (NspireRamReuseNode *)nspire_reuse_arena_alloc(
+      (u32)sizeof(NspireRamReuseNode) + cs);
+  if (!node)
+    return;
+
+  payload = (u8 *)(node + 1);
+  memcpy(payload, opc_buf, cs);
+  node->pc = block_start_pc;
+  node->code_size = cs;
+  node->gen = nspire_ram_reuse_generation;
+  node->native_off = native_off;
+  node->thumb_mode = 0u;
+  node->next = nspire_reuse_heads[b];
+  nspire_reuse_heads[b] = node;
+}
+
+static void nspire_ram_reuse_register_thumb(u32 block_start_pc, u32 block_end_pc,
+    u32 native_off)
+{
+  u16 opc_buf[1024];
+  s32 nh;
+  u32 cs = block_end_pc - block_start_pc;
+  NspireRamReuseNode *node;
+  u8 *payload;
+  u16 h;
+  u32 b;
+
+  if (nspire_dynarec_ram_policy || !nspire_dynarec_block_reuse || cs == 0u)
+    return;
+
+  nspire_reuse_read_thumb_halfwords(block_start_pc, block_end_pc, opc_buf, &nh);
+  if (nh <= 0 || (u32)(nh * 2u) != cs)
+    return;
+
+  h = nspire_reuse_cksum_thumb(opc_buf, nh);
+  b = (u32)h & (NSPIRE_REUSE_HASH_SIZE - 1u);
+
+  node = (NspireRamReuseNode *)nspire_reuse_arena_alloc(
+      (u32)sizeof(NspireRamReuseNode) + cs);
+  if (!node)
+    return;
+
+  payload = (u8 *)(node + 1);
+  memcpy(payload, opc_buf, cs);
+  node->pc = block_start_pc;
+  node->code_size = cs;
+  node->gen = nspire_ram_reuse_generation;
+  node->native_off = native_off;
+  node->thumb_mode = 1u;
+  node->next = nspire_reuse_heads[b];
+  nspire_reuse_heads[b] = node;
+}
+#endif /* NSPIRE_LIBRETRO */
 bool translate_block_arm(u32 pc, bool ram_region)
 {
   u32 opcode = 0;
@@ -3092,6 +3432,9 @@ bool translate_block_arm(u32 pc, bool ram_region)
   s32 i;
   u32 flag_status;
   block_exit_type external_block_exits[MAX_EXITS];
+#if defined(NSPIRE_LIBRETRO)
+  u32 nspire_reuse_native_off_arm = 0;
+#endif
   generate_block_extra_vars_arm();
   arm_fix_pc();
 
@@ -3229,6 +3572,13 @@ bool translate_block_arm(u32 pc, bool ram_region)
     }
   }
 
+#if defined(NSPIRE_LIBRETRO)
+  if (ram_region && !nspire_dynarec_ram_policy && nspire_dynarec_block_reuse
+      && nspire_reuse_tl_depth == 1 && block_data_position > 0)
+    nspire_reuse_native_off_arm =
+        (u32)(block_data[0].block_offset - ram_translation_cache);
+#endif
+
   if (ram_region)
     ram_translation_ptr = translation_ptr;
   else
@@ -3251,6 +3601,12 @@ bool translate_block_arm(u32 pc, bool ram_region)
     generate_branch_patch_unconditional(
       external_block_exits[i].branch_source, translation_target);
   }
+
+#if defined(NSPIRE_LIBRETRO)
+  if (nspire_reuse_native_off_arm)
+    nspire_ram_reuse_register_arm(block_start_pc, block_end_pc,
+        nspire_reuse_native_off_arm);
+#endif
 
   return true;
 }
@@ -3277,6 +3633,9 @@ bool translate_block_thumb(u32 pc, bool ram_region)
   s32 i;
   u32 flag_status;
   block_exit_type external_block_exits[MAX_EXITS];
+#if defined(NSPIRE_LIBRETRO)
+  u32 nspire_reuse_native_off_thumb = 0;
+#endif
   generate_block_extra_vars_thumb();
   thumb_fix_pc();
 
@@ -3404,6 +3763,13 @@ bool translate_block_thumb(u32 pc, bool ram_region)
     }
   }
 
+#if defined(NSPIRE_LIBRETRO)
+  if (ram_region && !nspire_dynarec_ram_policy && nspire_dynarec_block_reuse
+      && nspire_reuse_tl_depth == 1 && block_data_position > 0)
+    nspire_reuse_native_off_thumb =
+        (u32)(block_data[0].block_offset - ram_translation_cache);
+#endif
+
   if (ram_region)
     ram_translation_ptr = translation_ptr;
   else
@@ -3427,6 +3793,12 @@ bool translate_block_thumb(u32 pc, bool ram_region)
       external_block_exits[i].branch_source, translation_target);
   }
 
+#if defined(NSPIRE_LIBRETRO)
+  if (nspire_reuse_native_off_thumb)
+    nspire_ram_reuse_register_thumb(block_start_pc, block_end_pc,
+        nspire_reuse_native_off_thumb);
+#endif
+
   return true;
 }
 
@@ -3444,6 +3816,7 @@ void flush_translation_cache_ram(void)
 {
 #ifdef NSPIRE_LIBRETRO
   u8 *ram_jit_hi = ram_translation_ptr;
+  nspire_ram_reuse_invalidate();
 #endif
   /* Flushes RAM caches avoiding doing too much work (ie. wiping unused memory) */
   flush_ram_count++;
@@ -3510,6 +3883,10 @@ void init_dynarec_caches(void)
   /* Initialize caches so that we can start initalizing the emitter. */
   rom_translation_ptr = last_rom_translation_ptr = &rom_translation_cache[0];
   memset(rom_branch_hash, 0, sizeof(rom_branch_hash));
+
+#if defined(NSPIRE_LIBRETRO)
+  nspire_ram_reuse_invalidate();
+#endif
 
   ram_translation_ptr = last_ram_translation_ptr = &ram_translation_cache[0];
   memset(iwram, 0, 0x8000);
@@ -3678,6 +4055,11 @@ static void partial_flush_ram_inner(u32 address, int register_dynamic_gate)
       break;
     *(u16 *)smc_data = 0;
   }
+
+#if defined(NSPIRE_LIBRETRO)
+  if (!nspire_dynarec_ram_policy && nspire_dynarec_block_reuse)
+    nspire_ram_reuse_invalidate();
+#endif
 }
 
 void partial_flush_ram_full(u32 address)
