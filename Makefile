@@ -72,7 +72,7 @@ LOCAL_OBJS := \
   nspire_host_main.o nspire_frameskip.o nspire_video_present.o nspire_video_ui.o \
   nspire_input.o nspire_stubs.o nspire_backup.o nspire_stack_glue.o \
   nspire_video_renderer_dispatch.o video_cc_renderer.o old_video_renderer.o \
-  video_blend.o upscale_aspect.o scanline_fill16.o nspire_upscale_from_gba.o nspire.o nspire_rom_load_diag.o
+  video_blend.o upscale_aspect.o scanline_fill16.o nspire.o nspire_rom_load_diag.o
 
 OBJS := $(COMM_OBJS) $(CORE_OBJS) $(CORE_ASM_OBJS) $(CORE_CXX_OBJS) \
         $(LOCAL_OBJS) gui.o

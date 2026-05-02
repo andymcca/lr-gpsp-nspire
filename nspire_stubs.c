@@ -21,6 +21,8 @@ u32 nspire_frame_mix_choice = 0;
 u32 nspire_lcd_cache_clean_full = 0;
 /* 1 = draw FPS overlay on presented game frames. */
 u32 nspire_fps_overlay = 0;
+/* 1 = F-key cycles FF levels (default); 0 = F-key toggles FF1 vs normal. */
+u32 nspire_ff_key_style = 1;
 /* 1 = skip PPU BLDCNT blending / brightness passes (performance; inaccurate). */
 u32 nspire_gba_blend_off = 0;
 /* 0 = libretro video.cc renderer; 1 = legacy old_video/video.c renderer. */
@@ -28,6 +30,8 @@ u32 nspire_video_renderer_choice = 0;
 /* 0 = partial SMC (default); 1 = classic — flush_dynarec_caches on SMC + full
  * PC-relative block linking from RAM code (same emits as ROM blocks). */
 u32 nspire_dynarec_ram_policy = 0;
+/* RAM dynarec block reuse (partial SMC only; see nspire_ram_reuse_menu_hook). */
+u32 nspire_dynarec_block_reuse = 0;
 /* Runtime ROM page-cache target in MiB (2..32). */
 u32 nspire_rom_buffer_size_choice = 8;
 boot_mode selected_boot_mode = boot_game;
@@ -92,8 +96,24 @@ void nspire_emulator_options_apply(void)
   else if (last_ram_policy != nspire_dynarec_ram_policy)
   {
     last_ram_policy = nspire_dynarec_ram_policy;
+    if (nspire_dynarec_ram_policy)
+      nspire_dynarec_block_reuse = 0;
 #ifdef HAVE_DYNAREC
     /* Flushing before init_emitter / init_bios_hooks can crash the device. */
+    if (bios_swi_entrypoint)
+      flush_dynarec_caches();
+#endif
+  }
+
+  if (!block_reuse_seen)
+  {
+    block_reuse_seen = 1;
+    last_block_reuse = nspire_dynarec_block_reuse;
+  }
+  else if (last_block_reuse != nspire_dynarec_block_reuse)
+  {
+    last_block_reuse = nspire_dynarec_block_reuse;
+#ifdef HAVE_DYNAREC
     if (bios_swi_entrypoint)
       flush_dynarec_caches();
 #endif
@@ -102,6 +122,15 @@ void nspire_emulator_options_apply(void)
 
 void nspire_dynarec_ram_policy_menu_hook(void)
 {
+  if (nspire_dynarec_ram_policy)
+    nspire_dynarec_block_reuse = 0;
+  nspire_emulator_options_apply();
+}
+
+void nspire_ram_reuse_menu_hook(void)
+{
+  if (nspire_dynarec_ram_policy)
+    nspire_dynarec_block_reuse = 0;
   nspire_emulator_options_apply();
 }
 
