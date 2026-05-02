@@ -37,8 +37,6 @@ struct tm* localtime(const time_t*);
 void upscale_aspect(u16 *dst, u16 *src);
 void upscale_aspect_fast(u16 *dst, u16 *src);
 void upscale_aspect_raw(u16 *dst, u16 *src);
-/* Fused libretro RGB565 repack + raw upscale (no nspire_upscale_src pass). */
-void upscale_aspect_raw_from_gba(u16 *dst, const u16 *gba);
 
 void enableAlignmentExceptions();
 u32 menu_wrapper(u16*);
