@@ -2,10 +2,12 @@
 
 #include "common.h"
 #include "input.h"
+#include "main.h"
 #include "serial.h"
 #include "gba_memory.h"
 #include "gui.h"
 #include "nspire.h"
+#include "nspire_frameskip.h"
 #include "nspire_gui_video.h"
 
 #include <os.h>
@@ -167,10 +169,60 @@ u32 gamepad_config_map[16] = {
 u32 global_enable_analog = 0;
 u32 analog_sensitivity_level = 4;
 
-extern u32 synchronize_flag;
 extern u32 quick_save_slot;
 extern u32 savestate_slot;
+extern u32 synchronize_flag;
+extern u32 nspire_ff_key_style;
 extern void get_savestate_filename_noshot(u32 slot, u8 *name_buffer);
+
+/* F key (KEY_MAP_FASTFORWARD): cycle off → manual skip 4 → 8 → 16 → off.
+ * 1..3 while active (FPS overlay shows FF1/FF2/FF3); read-only elsewhere. */
+u32 nspire_f_frameskip_cycle;
+static frameskip_type nspire_saved_frameskip_type;
+static u32 nspire_saved_frameskip_value;
+
+static void nspire_fastforward_apply_level(u32 next)
+{
+  if (next == 0u)
+  {
+    current_frameskip_type = nspire_saved_frameskip_type;
+    frameskip_value = nspire_saved_frameskip_value;
+  }
+  else
+  {
+    if (next == 1u)
+    {
+      nspire_saved_frameskip_type = current_frameskip_type;
+      nspire_saved_frameskip_value = frameskip_value;
+    }
+    current_frameskip_type = manual_frameskip;
+    if (next == 1u)
+      frameskip_value = 4u;
+    else if (next == 2u)
+      frameskip_value = 8u;
+    else
+      frameskip_value = 16u;
+  }
+
+  nspire_f_frameskip_cycle = next;
+  /* Match legacy fast-forward: no LCD vblank pacing while FF1–FF3 active. */
+  synchronize_flag = (next == 0u) ? 1u : 0u;
+  nspire_frameskip_reset();
+}
+
+static void nspire_fastforward_key_levels_cycle(void)
+{
+  u32 next = (nspire_f_frameskip_cycle + 1u) & 3u;
+
+  nspire_fastforward_apply_level(next);
+}
+
+static void nspire_fastforward_key_onoff_toggle(void)
+{
+  u32 next = (nspire_f_frameskip_cycle == 0u) ? 1u : 0u;
+
+  nspire_fastforward_apply_level(next);
+}
 
 u32 update_input(void)
 {
@@ -250,7 +302,10 @@ u32 update_input(void)
 
   if (getnewkey(gamepad_config_map[KEY_MAP_FASTFORWARD]))
   {
-    synchronize_flag ^= 1;
+    if (nspire_ff_key_style == 0u)
+      nspire_fastforward_key_onoff_toggle();
+    else
+      nspire_fastforward_key_levels_cycle();
     return 0;
   }
 
