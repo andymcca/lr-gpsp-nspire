@@ -1059,8 +1059,7 @@ s32 load_config_file()
     // Sanity check: file sizes by feature growth:
     // 96 = +BIOS, 112 = +frameskip, 124 = +emulator options, 128 = +ROM buffer size,
     // 132 = +LCD cache mode, 136 = +FPS overlay, 140 = +GBA blend skip, 144 = +dynarec SMC policy,
-    // 148 = legacy, 152 = +video renderer, 156 = +RAM block reuse (partial SMC only),
-    // 160 = +fast-forward key style (on/off vs levels).
+    // 148 = legacy (extra u32 for removed RAM block reuse option; ignored), 152 = +video renderer.
     if(file_size == 92
 #if defined(NSPIRE_LIBRETRO)
      || file_size == 96
@@ -1073,14 +1072,12 @@ s32 load_config_file()
      || file_size == 144
      || file_size == 148
      || file_size == 152
-     || file_size == 156
-     || file_size == 160
 #endif
      )
     {
       u32 words = file_size / 4;
 #if defined(NSPIRE_LIBRETRO)
-      u32 file_options[39];
+      u32 file_options[38];
 #else
       u32 file_options[28];
 #endif
@@ -1198,16 +1195,6 @@ s32 load_config_file()
         nspire_video_renderer_choice = file_options[36] % 2;
       else
         nspire_video_renderer_choice = 0;
-      if (words >= 38)
-        nspire_dynarec_block_reuse = file_options[37] % 2;
-      else
-        nspire_dynarec_block_reuse = 0;
-      if (words >= 39)
-        nspire_ff_key_style = file_options[38] % 2;
-      else
-        nspire_ff_key_style = 1;
-      if (nspire_dynarec_ram_policy)
-        nspire_dynarec_block_reuse = 0;
       nspire_clamp_rom_buffer_size();
       nspire_emulator_options_apply();
 #endif
@@ -1296,7 +1283,7 @@ s32 save_config_file()
   if(file_check_valid(config_file))
   {
 #if defined(NSPIRE_LIBRETRO)
-    u32 file_options[39];
+    u32 file_options[37];
 #else
     u32 file_options[23];
 #endif
@@ -1333,9 +1320,7 @@ s32 save_config_file()
     file_options[34] = nspire_gba_blend_off % 2;
     file_options[35] = nspire_dynarec_ram_policy % 2;
     file_options[36] = nspire_video_renderer_choice % 2;
-    file_options[37] = nspire_dynarec_block_reuse % 2;
-    file_options[38] = nspire_ff_key_style % 2;
-    file_write(config_file, file_options, 39 * sizeof(u32));
+    file_write(config_file, file_options, 37 * sizeof(u32));
 #else
     file_write_array(config_file, file_options);
 #endif
@@ -1467,10 +1452,6 @@ void get_savestate_filename_noshot(u32 slot, u8 *name_buffer)
 
 u32 menu(u16 *original_screen)
 {
-#if defined(NSPIRE_LIBRETRO)
-  /* Fast forward skips LCD pacing; leaving it on makes the menu flip path flicker. */
-  synchronize_flag = 1;
-#endif
   u8 print_buffer[81];
   u32 clock_speed_number;
   u32 _current_option = 0;
@@ -1527,7 +1508,7 @@ u32 menu(u16 *original_screen)
     key_config_option( 8, "Start                ", "Start button on GBA."),
     key_config_option( 9, "Select               ", "Select button on GBA."),
     key_config_option(10, "Menu                 ", "Brings up the options menu."),
-	key_config_option(11, "Fast Forward         ", "Speed-up key; behavior set under Graphics (On/Off vs Levels)."),
+	key_config_option(11, "Fast Forward         ", "Toggles fastforward on/off."),
 	key_config_option(12, "Load State           ", "Loads the game state from the current slot."),
 	key_config_option(13, "Save State           ", "Saves the game state to the current slot."),
 	key_config_option(14, "Save+Exit            ", "Saves a state and exits; will be auto-loaded later."),
@@ -1555,7 +1536,7 @@ u32 menu(u16 *original_screen)
     "Start button on GBA.",
     "Select button on GBA.",
     "Brings up the options menu.",
-    "Fast-forward (see Graphics: On/Off vs Levels).",
+    "Toggles fastforward on/off.",
     "Loads the game state from the current slot.",
     "Saves the game state to the current slot.",
     "Rapidly press/release the A button on GBA.",
@@ -1767,7 +1748,7 @@ u32 menu(u16 *original_screen)
 
   void submenu_about()
   {
-    print_string("gpsp-libretro for nSpire (Alpha v0.5)", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 10);
+    print_string("gpsp-libretro for nSpire (Alpha v0.4.1)", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 10);
     print_string("by andymcca", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 20);
     print_string("Credits:", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 90);
     print_string("Exophase", COLOR_INACTIVE_ITEM, COLOR_BG, 10, 100);
@@ -1791,7 +1772,7 @@ u32 menu(u16 *original_screen)
 	}
 	else
 	{
-		print_string("gpsp-libretro for nspire (Alpha v0.5)",
+		print_string("gpsp-libretro for nspire (Alpha v0.4.1)",
 		 COLOR_ACTIVE_ITEM, COLOR_BG, 10, 10);
 	}
   }
@@ -1817,8 +1798,6 @@ u32 menu(u16 *original_screen)
   u8 *nspire_gba_blend_options[] = { "On", "Off (fast)" };
   u8 *nspire_video_renderer_options[] = { "libretro video.cc", "legacy old_video/video.c" };
   u8 *nspire_dynarec_ram_policy_options[] = { "Partial SMC (default)", "Classic (full flush on SMC)" };
-  u8 *nspire_dynarec_block_reuse_options[] = { "Off", "On (checksum)" };
-  u8 *nspire_ff_key_style_options[] = { "On/Off (FF1)", "Levels (FF1-FF3)" };
 #endif
 
 #ifndef PSP_BUILD
@@ -1906,18 +1885,14 @@ u32 menu(u16 *original_screen)
      "Draws actual/expected visible FPS (e.g. 16/20) after scaling.\n"
      "Expected follows frameskip (manual uses ~60/(N+1); auto uses ~60).\n"
      "Timing from hardware; may be coarse on some models.", 9),
-    string_selection_option(NULL, "Fast-forward key",
-     nspire_ff_key_style_options, &nspire_ff_key_style, 2,
-     "On/Off (FF1): mapped key toggles fast-forward (manual skip 4) vs normal play.\n"
-     "Levels (FF1-FF3): same key cycles FF1, FF2, FF3, then restores prior frameskip.", 10),
     string_selection_option(NULL, "GBA blending (BLDCNT)",
      nspire_gba_blend_options, &nspire_gba_blend_off, 2,
      "On: accurate alpha between layers, fades, and semi-transparent OBJ.\n"
-     "Off (fast): skips those passes (modes 0-2 and 4 only); wrong in many games.", 11),
+     "Off (fast): skips those passes (modes 0-2 and 4 only); wrong in many games.", 10),
     string_selection_option(NULL, "Video renderer",
      nspire_video_renderer_options, &nspire_video_renderer_choice, 2,
      "libretro video.cc is the default renderer.\n"
-     "legacy old_video/video.c can be faster in some scenes and uses video_blend.S.", 12),
+     "legacy old_video/video.c can be faster in some scenes and uses video_blend.S.", 11),
 #endif
 #elif !defined(GP2X_BUILD)
     string_selection_option(NULL, "Frameskip type", frameskip_options,
@@ -1972,7 +1947,7 @@ u32 menu(u16 *original_screen)
 #endif
      10),
 #endif
-    submenu_option(NULL, "Back", "Return to the main menu.", 13)
+    submenu_option(NULL, "Back", "Return to the main menu.", 12)
   };
 
   make_menu(graphics_sound, submenu_graphics_sound, NULL);
@@ -2085,11 +2060,6 @@ u32 menu(u16 *original_screen)
      "Partial SMC: only invalidate affected RAM code (faster).\n"
      "Classic: flush ROM+RAM dynarec on SMC and use full block linking\n"
      "(ROM/ RAM targets) like non-RAM blocks; slower but matches old gpSP.", 7),
-    string_selection_option(nspire_ram_reuse_menu_hook, "RAM block reuse",
-     nspire_dynarec_block_reuse_options, &nspire_dynarec_block_reuse, 2,
-     "Only when Dynarec RAM / SMC is Partial SMC. Reuses native RAM JIT when the\n"
-     "same GBA PC and opcode bytes match (checksum bucket). Cleared on SMC partial\n"
-     "invalidate and RAM dynarec flush. Forced Off in Classic mode.", 8),
     submenu_option(NULL, "Back", "Return to the main menu.", 13)
   };
 

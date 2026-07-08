@@ -248,21 +248,6 @@ u32 function_cc update_gba(int remaining_cycles)
           dispstat &= ~0x04;
 
         write_ioreg(REG_VCOUNT, vcount);
-#if defined(NSPIRE_LIBRETRO)
-        /* Ahead-of-LCD signal for auto frameskip (see nspire_frameskip_begin_frame).
-         * Stock gpSP polled the LCD on every emulated scanline; when the core outruns
-         * the panel the counter races to a large value, so auto always burned the full
-         * max skip streak (felt like fixed-interval / manual). Cap heat to frameskip+2
-         * so light load skips fewer frames; heavy load still reaches the GUI max. */
-        if (current_frameskip_type == auto_frameskip &&
-            synchronize_flag &&
-            (*(volatile unsigned *)0xC0000020 & 4u) != 0u)
-        {
-          s32 cap = (s32)frameskip_value + 2;
-          if (relative_frame_count < cap)
-            relative_frame_count++;
-        }
-#endif
       }
       write_ioreg(REG_DISPSTAT, dispstat);
     }

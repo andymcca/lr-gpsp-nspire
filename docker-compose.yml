@@ -1,0 +1,13 @@
+# Ndless SDK toolchain container (tag your image as ndless-dev:latest, or set
+# NSPIRE_BUILD_IMAGE). Mounts this repository root as /work.
+#
+# From this directory:
+#   docker compose run --rm ndless-dev make
+#   docker compose run --rm ndless-dev sh -c "make clean && make -j2"
+
+services:
+  ndless-dev:
+    image: ${NSPIRE_BUILD_IMAGE:-ndless-dev:latest}
+    volumes:
+      - .:/work
+    working_dir: /work

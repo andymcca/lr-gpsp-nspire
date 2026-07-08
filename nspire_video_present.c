@@ -65,20 +65,6 @@ static void nspire_fps_overlay_update_and_draw(void)
   if (!nspire_fps_overlay)
     return;
 
-  if (nspire_f_frameskip_cycle >= 1u && nspire_f_frameskip_cycle <= 3u)
-  {
-    snprintf(buf, sizeof(buf), "FF%u ", (unsigned)nspire_f_frameskip_cycle);
-    print_string_ext(buf, 0xFFFFu, 0x0000u, 2u, 2u, nspire_screen, 320u, 0u, 0u, FONT_HEIGHT);
-    return;
-  }
-
-  if (!synchronize_flag)
-  {
-    snprintf(buf, sizeof(buf), "FF ");
-    print_string_ext(buf, 0xFFFFu, 0x0000u, 2u, 2u, nspire_screen, 320u, 0u, 0u, FONT_HEIGHT);
-    return;
-  }
-
   get_ticks_us(&now);
   nspire_fps_accum++;
   if (nspire_fps_t0 == 0)
@@ -97,7 +83,7 @@ static void nspire_fps_overlay_update_and_draw(void)
   }
 
   expected = nspire_fps_expected_visible();
-  snprintf(buf, sizeof(buf), "FPS:%u/%u ", (unsigned)nspire_fps_shown, (unsigned)expected);
+  snprintf(buf, sizeof(buf), "FPS:%u/%u", (unsigned)nspire_fps_shown, (unsigned)expected);
   print_string_ext(buf, 0xFFFFu, 0x0000u, 2u, 2u, nspire_screen, 320u, 0u, 0u, FONT_HEIGHT);
 }
 #endif /* NSPIRE_LIBRETRO */
@@ -188,22 +174,31 @@ void nspire_present_frame(u32 skip_next_frame)
   if (skip_next_frame)
   {
     update_at_vblank();
+#if defined(NSPIRE_LIBRETRO)
+    relative_frame_count++;
+#endif
     return;
   }
 
   if ((resolution_width == 240) && (resolution_height == 160) && gba_screen_pixels)
   {
     if (nspire_frame_mix_choice)
+    {
       repack_gba_mix_to_upscale_src();
+      if (screen_scale == fullscreen)
+        upscale_aspect_fast(nspire_screen, nspire_upscale_src);
+      else if (screen_scale == scaled_raw)
+        upscale_aspect_raw(nspire_screen, nspire_upscale_src);
+      else
+        upscale_aspect(nspire_screen, nspire_upscale_src);
+    }
     else
-      repack_gba_to_upscale_src();
-
-    if (screen_scale == fullscreen)
-      upscale_aspect_fast(nspire_screen, nspire_upscale_src);
-    else if (screen_scale == scaled_raw)
-      upscale_aspect_raw(nspire_screen, nspire_upscale_src);
-    else
-      upscale_aspect(nspire_screen, nspire_upscale_src);
+    {
+      /* Option-A experiment: avoid full-frame repack on non-mix gameplay.
+       * This routes all scale modes through the direct one-pass path so we can
+       * measure the repack overhead impact on device. */
+      upscale_aspect_raw_from_gba(nspire_screen, gba_screen_pixels);
+    }
 #if defined(NSPIRE_LIBRETRO)
     nspire_fps_overlay_update_and_draw();
 #endif
@@ -218,4 +213,7 @@ void nspire_present_frame(u32 skip_next_frame)
     nspire_screen_3 = temp;
   }
   update_at_vblank();
+#if defined(NSPIRE_LIBRETRO)
+  relative_frame_count++;
+#endif
 }

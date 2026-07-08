@@ -201,7 +201,7 @@ typedef u32 fixed8_24;
 #include "gba_memory.h"
 #include "savestate.h"
 #if defined(NSPIRE_LIBRETRO) && defined(COMPILING_GUI_MODULE)
-#include "../nspire-libretro/nspire_gui_video.h"
+#include "nspire_gui_video.h"
 #else
 #include "video.h"
 #endif

@@ -108,10 +108,6 @@ extern u32 nspire_rtc_choice;
 extern u32 nspire_frame_mix_choice;
 extern u32 nspire_lcd_cache_clean_full;
 extern u32 nspire_fps_overlay;
-/* F-key turbo frameskip level 0=off, 1..3 = manual skip depth (see nspire_input.c). */
-extern u32 nspire_f_frameskip_cycle;
-/* 0 = Fast-Forward key toggles on/off (FF1 only); 1 = key cycles FF1/FF2/FF3 then off. */
-extern u32 nspire_ff_key_style;
 /* 1 = skip BLDCNT alpha / fade / semi-transparent combine in video.cc (faster). */
 extern u32 nspire_gba_blend_off;
 /* 0 = libretro video.cc renderer; 1 = legacy old_video/video.c renderer. */
@@ -120,12 +116,9 @@ extern u32 nspire_video_renderer_choice;
  * flush_dynarec_caches() on SMC and full PC-relative block linking from RAM
  * code (same as ROM emits). */
 extern u32 nspire_dynarec_ram_policy;
-/* RAM JIT block reuse (checksum + opcode bytes). Only active in Partial SMC mode. */
-extern u32 nspire_dynarec_block_reuse;
 extern u32 nspire_rom_buffer_size_choice;
 void nspire_emulator_options_apply(void);
 void nspire_dynarec_ram_policy_menu_hook(void);
-void nspire_ram_reuse_menu_hook(void);
 void get_ticks_us(u64 *ticks_return);
 void nspire_fps_overlay_reset(void);
 void nspire_video_mix_reset(void);
