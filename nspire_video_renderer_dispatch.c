@@ -1,6 +1,8 @@
 #include "common.h"
 #include "main.h"
 #include "video.h"
+#include "nspire.h"
+#include "nspire_frontend.h"
 
 /* Canonical globals used by the standalone host and other core modules. */
 u16 *gba_screen_pixels = NULL;
@@ -56,12 +58,20 @@ static void sync_state_from_renderer(int use_old_renderer)
 void update_scanline(void)
 {
   int use_old_renderer = (nspire_video_renderer_choice != 0);
+  u32 start = 0;
+
+  /* Drawing time, for the detailed FPS counter and the speed test. The
+   * timer's 30 us steps are coarse for a line, but even out over a frame. */
+  if (nspire_perf_on && !skip_next_frame)
+    start = nspire_ticks();
   sync_state_to_renderer(use_old_renderer);
   if (use_old_renderer)
     old_video_update_scanline();
   else
     video_cc_update_scanline();
   sync_state_from_renderer(use_old_renderer);
+  if (nspire_perf_on && !skip_next_frame)
+    nspire_render_ticks += nspire_ticks() - start;
 }
 
 void video_reload_counters(void)

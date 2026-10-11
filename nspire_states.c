@@ -1,0 +1,552 @@
+/* Save state slots: see nspire_states.h. */
+
+#include "common.h"
+#include "nspire_states.h"
+#include "nspire_zip.h"
+#include "nspire_frontend.h"
+
+#include <ctype.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <zlib.h>
+
+#define STATE_MAGIC   "GPSZ"
+#define STATE_VERSION 1
+/* In the header's flags: written by a build that finds the newest state by
+ * its counter (this one). The first QoL build's states don't have it. */
+#define STATE_FLAG_COUNTED 1u
+/* The state follows the header as it is, not packed (Compress saves off). */
+#define STATE_FLAG_STORED  2u
+#define STATE_LEVEL   6       /* zlib level: 6 packs nearly as small as 9, faster */
+#define CHUNK         16384   /* file reads and writes go through this */
+
+struct state_header
+{
+  char magic[4];
+  u32 version;
+  u32 counter;       /* saves are numbered; the newest has the highest */
+  u32 raw_size;      /* GBA_STATE_MEM_SIZE */
+  u32 packed_size;   /* zlib bytes after the header (raw_size if stored) */
+  u32 flags;
+  u32 reserved[2];
+};
+
+static char base_path[512];   /* "dir/Pokemon.gba" */
+static unsigned char used[STATE_SLOTS];
+static unsigned char counted[STATE_SLOTS];   /* has STATE_FLAG_COUNTED */
+static u32 counters[STATE_SLOTS];
+static u32 mtimes[STATE_SLOTS];             /* the file's modified time */
+static u8 io_buffer[CHUNK];
+
+/* A zip's saves are named after the ROM in it, in the zip's folder, so the
+ * zipped and unzipped game share them. The name is looked up once per zip. */
+static int zip_base(const char *rom_path, char *out, size_t size)
+{
+  static char last_zip[512], last_inner[256];
+  const char *slash;
+  size_t len = strlen(rom_path), dir_len;
+
+  if (!((len > 8 && !strcasecmp(rom_path + len - 8, ".zip.tns")) ||
+        (len > 4 && !strcasecmp(rom_path + len - 4, ".zip"))))
+    return 0;
+  if (strcmp(last_zip, rom_path))
+  {
+    if (!zip_rom_name(rom_path, last_inner, sizeof(last_inner)))
+      return 0;
+    snprintf(last_zip, sizeof(last_zip), "%s", rom_path);
+  }
+  slash = strrchr(rom_path, '/');
+  dir_len = slash ? (size_t)(slash - rom_path) + 1 : 0;
+  snprintf(out, size, "%.*s%s", (int)dir_len, rom_path, last_inner);
+  return 1;
+}
+
+void nspire_game_base(const char *rom_path, char *out, size_t size)
+{
+  const char *slash = strrchr(rom_path, '/');
+  const char *dot = strrchr(rom_path, '.');
+  size_t len = strlen(rom_path);
+
+  if (zip_base(rom_path, out, size))
+    return;
+
+  if (dot && (!slash || dot > slash))
+    len = (size_t)(dot - rom_path);
+  if (len >= size)
+    len = size - 1;
+  memcpy(out, rom_path, len);
+  out[len] = 0;
+  if (len >= 4 && !strcasecmp(out + len - 4, ".gbz"))
+    memcpy(out + len - 4, ".gba", 4);
+}
+
+void states_file_name(int slot, char *out, size_t size)
+{
+  snprintf(out, size, "%s%d.svs.tns", base_path, slot);
+}
+
+/* The slot of a file name like "Pokemon.gba12.svs.tns", or -1. */
+static int slot_from_name(const char *name, const char *prefix, size_t prefix_len)
+{
+  const char *p = name + prefix_len;
+  int slot = 0, digits = 0;
+
+  if (strncasecmp(name, prefix, prefix_len) != 0)
+    return -1;
+  while (isdigit((unsigned char)*p) && digits < 4)
+  {
+    slot = slot * 10 + (*p++ - '0');
+    digits++;
+  }
+  if (!digits || slot >= STATE_SLOTS || (digits > 1 && p[-digits] == '0'))
+    return -1;
+  return strcasecmp(p, ".svs.tns") == 0 ? slot : -1;
+}
+
+/* The header's counter (0 for an old uncompressed state), its flag, and the
+ * file's modified time. */
+static void read_slot_info(int slot)
+{
+  char path[600];
+  struct state_header header;
+  struct stat st;
+  FILE *f;
+
+  counters[slot] = mtimes[slot] = 0;
+  counted[slot] = 0;
+  states_file_name(slot, path, sizeof(path));
+  /* st_mtim: Ndless's os.h undefines the st_mtime shorthand. */
+  if (stat(path, &st) == 0)
+    mtimes[slot] = (u32)st.st_mtim.tv_sec;
+  f = fopen(path, "rb");
+  if (!f)
+    return;
+  if (fread(&header, sizeof(header), 1, f) == 1 && !memcmp(header.magic, STATE_MAGIC, 4))
+  {
+    counters[slot] = header.counter;
+    counted[slot] = (header.flags & STATE_FLAG_COUNTED) != 0;
+  }
+  fclose(f);
+}
+
+void states_open_game(const char *rom_path)
+{
+  char dir_path[512];
+  const char *prefix;
+  size_t prefix_len;
+  char *slash;
+  DIR *dir;
+  struct dirent *entry;
+  int slot;
+
+  nspire_game_base(rom_path, base_path, sizeof(base_path));
+  memset(used, 0, sizeof(used));
+  memset(counted, 0, sizeof(counted));
+  memset(counters, 0, sizeof(counters));
+  memset(mtimes, 0, sizeof(mtimes));
+
+  snprintf(dir_path, sizeof(dir_path), "%s", base_path);
+  slash = strrchr(dir_path, '/');
+  if (slash)
+  {
+    prefix = base_path + (slash - dir_path) + 1;
+    if (slash == dir_path)
+      slash[1] = 0;
+    else
+      *slash = 0;
+  }
+  else
+  {
+    prefix = base_path;
+    strcpy(dir_path, ".");
+  }
+  prefix_len = strlen(prefix);
+
+  dir = opendir(dir_path);
+  if (!dir)
+    return;
+  while ((entry = readdir(dir)) != NULL)
+  {
+    slot = slot_from_name(entry->d_name, prefix, prefix_len);
+    if (slot >= 0)
+      used[slot] = 1;
+  }
+  closedir(dir);
+
+  for (slot = 0; slot < STATE_SLOTS; slot++)
+    if (used[slot])
+      read_slot_info(slot);
+}
+
+int states_exists(int slot)
+{
+  return slot >= 0 && slot < STATE_SLOTS && used[slot];
+}
+
+int states_count(void)
+{
+  int slot, count = 0;
+  for (slot = 0; slot < STATE_SLOTS; slot++)
+    count += used[slot];
+  return count;
+}
+
+/* This build's states count their saves, which still orders them after the
+ * calculator's clock is reset (as a reset of the calculator does). States
+ * from older builds don't: while a game has none of this build's, the most
+ * recently modified file is the newest. */
+int states_newest(void)
+{
+  int slot, newest = -1, any_counted = 0;
+
+  for (slot = 0; slot < STATE_SLOTS; slot++)
+    any_counted |= used[slot] && counted[slot];
+  for (slot = 0; slot < STATE_SLOTS; slot++)
+  {
+    if (!used[slot] || (any_counted && !counted[slot]))
+      continue;
+    if (newest < 0 ||
+        (any_counted ? counters[slot] >= counters[newest] :
+                       mtimes[slot] > mtimes[newest] ||
+                       (mtimes[slot] == mtimes[newest] && counters[slot] >= counters[newest])))
+      newest = slot;
+  }
+  return newest;
+}
+
+int states_next_new_slot(void)
+{
+  int slot, highest = -1;
+  for (slot = 0; slot < STATE_SLOTS; slot++)
+    if (used[slot])
+      highest = slot;
+  if (highest < STATE_SLOTS - 1)
+    return highest + 1;
+  for (slot = 0; slot < STATE_SLOTS; slot++)
+    if (!used[slot])
+      return slot;
+  return -1;
+}
+
+/* The state in memory. The buffer starts zeroed so the state's unused room
+ * (its "zpadding" field) packs down to almost nothing. */
+static u8 *state_to_memory(void)
+{
+  u8 *raw = (u8 *)calloc(1, GBA_STATE_MEM_SIZE);
+  if (raw)
+    gba_save_state(raw);
+  return raw;
+}
+
+/* Packs raw into f after its header (which is filled in). */
+static int write_packed(FILE *f, const u8 *raw, struct state_header *header)
+{
+  z_stream z;
+  int status, ok = 1;
+
+  memset(&z, 0, sizeof(z));
+  if (deflateInit(&z, STATE_LEVEL) != Z_OK)
+    return 0;
+  z.next_in = (Bytef *)raw;
+  z.avail_in = GBA_STATE_MEM_SIZE;
+  header->packed_size = 0;
+  do
+  {
+    z.next_out = io_buffer;
+    z.avail_out = CHUNK;
+    status = deflate(&z, Z_FINISH);
+    if (status == Z_STREAM_ERROR)
+    {
+      ok = 0;
+      break;
+    }
+    if (fwrite(io_buffer, 1, CHUNK - z.avail_out, f) != CHUNK - z.avail_out)
+      ok = 0;
+    header->packed_size += CHUNK - z.avail_out;
+  } while (ok && status != Z_STREAM_END);
+  deflateEnd(&z);
+  return ok && status == Z_STREAM_END;
+}
+
+/* The state after the header: packed, or as it is when the header says
+ * stored. */
+static int write_payload(FILE *f, const u8 *raw, struct state_header *header)
+{
+  if (header->flags & STATE_FLAG_STORED)
+  {
+    header->packed_size = GBA_STATE_MEM_SIZE;
+    return fwrite(raw, 1, GBA_STATE_MEM_SIZE, f) == GBA_STATE_MEM_SIZE;
+  }
+  return write_packed(f, raw, header);
+}
+
+int states_save(int slot)
+{
+  char path[600], temp_path[620];
+  struct state_header header;
+  u8 *raw;
+  FILE *f;
+  int i, ok;
+
+  if (slot < 0 || slot >= STATE_SLOTS)
+    return 0;
+#ifdef HAVE_DYNAREC
+  if (dynarec_enable)
+    flush_dynarec_caches();
+#endif
+  raw = state_to_memory();
+  if (!raw)
+    return 0;
+
+  memset(&header, 0, sizeof(header));
+  memcpy(header.magic, STATE_MAGIC, 4);
+  header.version = STATE_VERSION;
+  header.raw_size = GBA_STATE_MEM_SIZE;
+  header.flags = STATE_FLAG_COUNTED | (nspire_compress_saves ? 0 : STATE_FLAG_STORED);
+  header.counter = 1;
+  for (i = 0; i < STATE_SLOTS; i++)
+    if (used[i] && counters[i] >= header.counter)
+      header.counter = counters[i] + 1;
+
+  /* A temporary file first, so running out of space can't destroy the
+   * state already in the slot. */
+  states_file_name(slot, path, sizeof(path));
+  snprintf(temp_path, sizeof(temp_path), "%s.tmp", path);
+  f = fopen(temp_path, "wb");
+  ok = f != NULL;
+  if (ok)
+  {
+    ok = fwrite(&header, sizeof(header), 1, f) == 1 && write_payload(f, raw, &header) &&
+         fseek(f, 0, SEEK_SET) == 0 && fwrite(&header, sizeof(header), 1, f) == 1;
+    if (fclose(f) != 0)
+      ok = 0;
+    if (ok)
+    {
+      remove(path);
+      ok = rename(temp_path, path) == 0;
+    }
+    if (!ok)
+      remove(temp_path);
+  }
+  free(raw);
+  if (!ok)
+    return 0;
+  used[slot] = 1;
+  counted[slot] = 1;
+  counters[slot] = header.counter;
+  return 1;
+}
+
+static int read_packed(FILE *f, u8 *raw, const struct state_header *header)
+{
+  z_stream z;
+  int status = Z_OK;
+  u32 left = header->packed_size;
+
+  memset(&z, 0, sizeof(z));
+  if (inflateInit(&z) != Z_OK)
+    return 0;
+  z.next_out = raw;
+  z.avail_out = GBA_STATE_MEM_SIZE;
+  while (left && status == Z_OK)
+  {
+    u32 want = left < CHUNK ? left : CHUNK;
+    if (fread(io_buffer, 1, want, f) != want)
+      break;
+    left -= want;
+    z.next_in = io_buffer;
+    z.avail_in = want;
+    status = inflate(&z, Z_NO_FLUSH);
+  }
+  inflateEnd(&z);
+  return status == Z_STREAM_END && z.total_out == GBA_STATE_MEM_SIZE;
+}
+
+int states_load_file(const char *path)
+{
+  struct state_header header;
+  u8 *raw;
+  FILE *f;
+  int ok = 0;
+  long size;
+
+  f = fopen(path, "rb");
+  if (!f)
+    return 0;
+  raw = (u8 *)malloc(GBA_STATE_MEM_SIZE);
+  if (raw && fread(&header, sizeof(header), 1, f) == 1)
+  {
+    if (!memcmp(header.magic, STATE_MAGIC, 4))
+      ok = header.version == STATE_VERSION && header.raw_size == GBA_STATE_MEM_SIZE &&
+           ((header.flags & STATE_FLAG_STORED) ?
+            fread(raw, 1, GBA_STATE_MEM_SIZE, f) == GBA_STATE_MEM_SIZE :
+            read_packed(f, raw, &header));
+    else if (fseek(f, 0, SEEK_END) == 0 && (size = ftell(f)) == GBA_STATE_MEM_SIZE &&
+             fseek(f, 0, SEEK_SET) == 0)
+      /* gpSP's older states: the state as it is in memory. */
+      ok = fread(raw, 1, GBA_STATE_MEM_SIZE, f) == GBA_STATE_MEM_SIZE;
+  }
+  fclose(f);
+  if (ok)
+    ok = gba_load_state(raw);
+  free(raw);
+  return ok ? 1 : -1;
+}
+
+int states_load(int slot)
+{
+  char path[600];
+  int result;
+
+  if (!states_exists(slot))
+    return 0;
+  states_file_name(slot, path, sizeof(path));
+  result = states_load_file(path);
+  if (result == 0)
+    used[slot] = 0;   /* the file went away */
+  return result;
+}
+
+void *states_snapshot(void)
+{
+#ifdef HAVE_DYNAREC
+  if (dynarec_enable)
+    flush_dynarec_caches();
+#endif
+  return state_to_memory();
+}
+
+int states_restore(const void *snapshot)
+{
+  return snapshot && gba_load_state(snapshot);
+}
+
+/* ---- For the save manager ---- */
+
+int states_file_info(int slot, long *bytes, int *compressed)
+{
+  char path[600];
+  struct state_header header;
+  struct stat st;
+  FILE *f;
+
+  if (!states_exists(slot))
+    return 0;
+  states_file_name(slot, path, sizeof(path));
+  if (stat(path, &st) != 0)
+    return 0;
+  *bytes = (long)st.st_size;
+  *compressed = 0;
+  f = fopen(path, "rb");
+  if (f)
+  {
+    *compressed = fread(&header, sizeof(header), 1, f) == 1 && !memcmp(header.magic, STATE_MAGIC, 4) &&
+                  !(header.flags & STATE_FLAG_STORED);
+    fclose(f);
+  }
+  return 1;
+}
+
+/* Rewrites a state packed or stored, keeping its counter (so which one is
+ * the newest doesn't change). A state from an older build gets a header
+ * (it's then this build's, counted as older than the others). */
+int states_set_compressed(int slot, int compress)
+{
+  char path[600], temp_path[620];
+  struct state_header header;
+  u8 *raw;
+  FILE *f;
+  long size = 0;
+  int ok = 0, had_header = 0;
+
+  if (!states_exists(slot))
+    return 0;
+  states_file_name(slot, path, sizeof(path));
+  raw = (u8 *)malloc(GBA_STATE_MEM_SIZE);
+  f = fopen(path, "rb");
+  if (raw && f && fread(&header, sizeof(header), 1, f) == 1)
+  {
+    if (!memcmp(header.magic, STATE_MAGIC, 4))
+    {
+      had_header = 1;
+      if (!(header.flags & STATE_FLAG_STORED) == !!compress)
+      {
+        fclose(f);
+        free(raw);
+        return 1;   /* already that way */
+      }
+      ok = header.version == STATE_VERSION && header.raw_size == GBA_STATE_MEM_SIZE &&
+           ((header.flags & STATE_FLAG_STORED) ? fread(raw, 1, GBA_STATE_MEM_SIZE, f) == GBA_STATE_MEM_SIZE
+                                               : read_packed(f, raw, &header));
+    }
+    else if (fseek(f, 0, SEEK_END) == 0 && (size = ftell(f)) == GBA_STATE_MEM_SIZE &&
+             fseek(f, 0, SEEK_SET) == 0)
+    {
+      if (!compress)
+      {
+        fclose(f);
+        free(raw);
+        return 1;   /* an older build's state is stored as it is already */
+      }
+      ok = fread(raw, 1, GBA_STATE_MEM_SIZE, f) == GBA_STATE_MEM_SIZE;
+    }
+  }
+  if (f)
+    fclose(f);
+  if (!ok)
+  {
+    free(raw);
+    return 0;
+  }
+
+  if (!had_header)
+  {
+    memset(&header, 0, sizeof(header));
+    memcpy(header.magic, STATE_MAGIC, 4);
+    header.version = STATE_VERSION;
+    header.raw_size = GBA_STATE_MEM_SIZE;
+    header.counter = counters[slot];
+    header.flags = counted[slot] ? STATE_FLAG_COUNTED : 0;
+  }
+  header.flags = compress ? header.flags & ~STATE_FLAG_STORED : header.flags | STATE_FLAG_STORED;
+
+  snprintf(temp_path, sizeof(temp_path), "%s.tmp", path);
+  f = fopen(temp_path, "wb");
+  ok = f != NULL;
+  if (ok)
+  {
+    ok = fwrite(&header, sizeof(header), 1, f) == 1 && write_payload(f, raw, &header) &&
+         fseek(f, 0, SEEK_SET) == 0 && fwrite(&header, sizeof(header), 1, f) == 1;
+    if (fclose(f) != 0)
+      ok = 0;
+    if (ok)
+    {
+      remove(path);
+      ok = rename(temp_path, path) == 0;
+    }
+    if (!ok)
+      remove(temp_path);
+  }
+  free(raw);
+  if (ok)
+    read_slot_info(slot);
+  return ok;
+}
+
+int states_delete(int slot)
+{
+  char path[600];
+
+  if (!states_exists(slot))
+    return 0;
+  states_file_name(slot, path, sizeof(path));
+  if (remove(path) != 0)
+    return 0;
+  used[slot] = counted[slot] = 0;
+  counters[slot] = mtimes[slot] = 0;
+  return 1;
+}

@@ -47,10 +47,10 @@ CXXFLAGS := -O3 -flto -std=gnu++11 -msoft-float -funsigned-char -fno-common \
 GUI_CPPFLAGS := -DCOMPILING_GUI_MODULE
 
 LDFLAGS := -O3 -flto $(ARM926FLAGS)
-LDLIBS  := -lm
+LDLIBS  := -lz -lm
 
 ZEHNFLAGS := --version 12 --author "gpSP libretro port" --clickpad-support=false \
-             --color-support=true --compress --ndless-min 31 --ndless-rev-min 2001
+             --color-support=true --240x320-support=true --compress --ndless-min 31 --ndless-rev-min 2001
 
 VPATH := $(CORE_DIR):$(ARM_VPATH):$(COMM_DIR)/compat:$(COMM_DIR)/encodings:\
 $(COMM_DIR)/file:$(COMM_DIR)/streams:$(COMM_DIR)/string:$(COMM_DIR)/time:\
@@ -72,7 +72,10 @@ LOCAL_OBJS := \
   nspire_host_main.o nspire_frameskip.o nspire_video_present.o nspire_video_ui.o \
   nspire_input.o nspire_stubs.o nspire_backup.o nspire_stack_glue.o \
   nspire_video_renderer_dispatch.o video_cc_renderer.o old_video_renderer.o \
-  video_blend.o upscale_aspect.o scanline_fill16.o nspire_upscale_from_gba.o nspire.o nspire_rom_load_diag.o
+  video_blend.o upscale_aspect.o scanline_fill16.o nspire_upscale_from_gba.o nspire_turn.o nspire.o nspire_rom_load_diag.o \
+  nspire_gbz.o nspire_states.o nspire_config.o nspire_clock.o clock_switch_nspire.o nspire_keys.o \
+  nspire_brightness.o nspire_game_list.o nspire_blend.o \
+  nspire_zip.o nspire_loading.o nspire_save_manager.o
 
 OBJS := $(COMM_OBJS) $(CORE_OBJS) $(CORE_ASM_OBJS) $(CORE_CXX_OBJS) \
         $(LOCAL_OBJS) gui.o
@@ -101,6 +104,9 @@ upscale_aspect.o: nspire/upscale_aspect.s
 	$(GCC) $(CFLAGS) -c $< -o $@
 
 scanline_fill16.o: nspire/scanline_fill16.S
+	$(GCC) $(CFLAGS) -c $< -o $@
+
+clock_switch_nspire.o: nspire/clock_switch_nspire.S
 	$(GCC) $(CFLAGS) -c $< -o $@
 
 cpu.o: $(CORE_DIR)/cpu.cc

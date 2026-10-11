@@ -4,6 +4,7 @@
 #include "nspire_gui_video.h"
 #include "font.h"
 #include "nspire.h"
+#include "nspire_frontend.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -26,9 +27,16 @@ u32 frame_speed = 15000;
 static u32 debug_cursor_x;
 static u32 debug_cursor_y;
 
+/* Portrait LCD: menus draw landscape into nspire_landscape, and
+ * flip_screen turns it into the display buffer. */
+static u16 *ui_screen(void)
+{
+  return nspire_lcd_portrait ? nspire_landscape : (u16 *)nspire_screen;
+}
+
 void init_video(void)
 {
-  screen_pixels = (u16 *)nspire_screen;
+  screen_pixels = ui_screen();
 }
 
 void video_resolution_large(void)
@@ -77,10 +85,15 @@ void set_gba_resolution(video_scale_type scale)
   screen_scale = scale;
 }
 
+/* Clears the frame menus draw into. On a portrait LCD that is the landscape
+ * frame flip_screen turns: the screen buffers themselves are only ever
+ * written whole by flip_screen and the game's frames, never the one being
+ * shown. (video_resolution_small clears all of them by flipping cleared
+ * frames into each in turn.) */
 void clear_screen(u16 color)
 {
   u32 col = ((u32)color << 16) | color;
-  u32 *p = (u32 *)nspire_screen;
+  u32 *p = (u32 *)ui_screen();
   int c = 320 * 240 / 2;
   while (c-- > 0)
     *p++ = col;
@@ -91,6 +104,20 @@ u16 *copy_screen(void)
   static u16 copy[240 * 160];
   u32 row;
   u16 *dst, *src;
+
+  if (nspire_lcd_portrait && gba_screen_pixels)
+  {
+    /* The display buffers hold turned frames; take the game's own frame,
+     * in the menu's color format. */
+    u32 i;
+    for (i = 0; i < 240 * 160; i++)
+    {
+      u16 p = gba_screen_pixels[(i / 240) * GBA_SCREEN_PITCH + i % 240];
+      copy[i] = (u16)(((p & 0x1Fu) << 10) | (((p & 0x07C0u) >> 1) & 0x03E0u) | ((p >> 11) & 0x1Fu));
+    }
+    return copy;
+  }
+
   for (row = 0, dst = copy, src = get_screen_pixels(); row < 160;
        row++, dst += 240, src += get_screen_pitch())
     memcpy(dst, src, 240 * 2);
@@ -110,6 +137,24 @@ void blit_to_screen(u16 *src, u32 w, u32 h, u32 dest_x, u32 dest_y)
     for (x = 0; x < w; x++, src_ptr++, dest_ptr++)
       *dest_ptr = *src_ptr;
     dest_ptr += line_skip;
+  }
+}
+
+/* A filled rectangle in the frame menus draw into (320x240). */
+void fill_rect(u32 x, u32 y, u32 w, u32 h, u16 color)
+{
+  u32 i, j;
+  if (x >= 320 || y >= 240)
+    return;
+  if (w > 320 - x)
+    w = 320 - x;
+  if (h > 240 - y)
+    h = 240 - y;
+  for (j = 0; j < h; j++)
+  {
+    u16 *row = ui_screen() + (y + j) * 320 + x;
+    for (i = 0; i < w; i++)
+      row[i] = color;
   }
 }
 
@@ -172,6 +217,25 @@ void print_string_ext(const char *str, u16 fg_color, u16 bg_color, u32 x, u32 y,
   }
 }
 
+/* Text into any 16-bit buffer (the in-game counters and messages), without
+ * the menu's clipping: it stops before max_x. Returns the x after the text. */
+u32 nspire_draw_text(u16 *dst, u32 pitch, u32 x, u32 y, const char *text, u16 fg, u16 bg,
+                     u32 max_x)
+{
+  for (; *text && x + FONT_WIDTH <= max_x; text++, x += FONT_WIDTH)
+  {
+    u32 glyph = _font_offset[(u8)*text], row, col;
+    u16 *d = dst + y * pitch + x;
+    for (row = 0; row < FONT_HEIGHT; row++, d += pitch)
+    {
+      u32 bits = _font_bits[glyph + row];
+      for (col = 0; col < FONT_WIDTH; col++)
+        d[col] = ((bits >> (15 - col)) & 1) ? fg : bg;
+    }
+  }
+  return x;
+}
+
 void print_string(const char *str, u16 fg_color, u16 bg_color, u32 x, u32 y)
 {
   print_string_ext(str, fg_color, bg_color, x, y, get_screen_pixels(), get_screen_pitch(), 0, 0,
@@ -189,21 +253,19 @@ void flip_screen(void)
   if ((resolution_width == 240) && (resolution_height == 160))
   {
     if (screen_scale == fullscreen)
-      upscale_aspect_fast(nspire_screen, screen_pixels);
+      upscale_aspect_fast(ui_screen(), screen_pixels);
     else if (screen_scale == scaled_raw)
-      upscale_aspect_raw(nspire_screen, screen_pixels);
+      upscale_aspect_raw(ui_screen(), screen_pixels);
     else
-      upscale_aspect(nspire_screen, screen_pixels);
+      upscale_aspect(ui_screen(), screen_pixels);
   }
-  nspire_lcd_fb_cache_clean_for_display();
+  if (nspire_lcd_portrait)
   {
-    void *temp = nspire_displayed_screen;
-    nspire_displayed_screen = nspire_screen;
-    nspire_screen = nspire_screen_2;
-    nspire_screen_2 = nspire_screen_3;
-    nspire_screen_3 = temp;
-    screen_pixels = (u16 *)nspire_screen + screen_offset;
+    nspire_turn_rect_555(nspire_screen, nspire_landscape, 320, 0, 0, 320, 240);
+    nspire_present_forget_bands();
   }
+  nspire_flip();
+  screen_pixels = ui_screen() + screen_offset;
 }
 
 void update_screen(void) {}

@@ -92,12 +92,12 @@ typedef enum
   CURSOR_EXIT,
   CURSOR_L,
   CURSOR_R,
+  CURSOR_CLEAR,   /* del: clears a key binding */
   CURSOR_NONE
 } gui_action_type;
 
 gui_action_type get_gui_input(void);
 
-extern u32 gamepad_config_map[16];
 extern u32 global_enable_analog;
 extern u32 analog_sensitivity_level;
 #endif

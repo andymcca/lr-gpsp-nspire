@@ -43,6 +43,12 @@
 #include "serial.h"
 #include "nspire_frameskip.h"
 #include "savestate.h"
+#include "nspire_frontend.h"
+#include "nspire_keys.h"
+#include "nspire_states.h"
+#include "nspire_clock.h"
+#include "nspire_brightness.h"
+#include "nspire_game_list.h"
 #endif
 
 #if defined(NSPIRE_LIBRETRO)
@@ -108,6 +114,7 @@ static void nspire_clamp_rom_buffer_size(void)
 #define COLOR_INACTIVE_ITEM color16(13, 40, 18)
 #define COLOR_FRAMESKIP_BAR color16(15, 31, 31)
 #define COLOR_HELP_TEXT     color16(16, 40, 24)
+#define COLOR_MOVING        color16(31, 50, 4)
 
 #ifdef PSP_BUILD
   u8 *clock_speed_options[] =
@@ -212,6 +219,15 @@ s32 load_file(u8 **wildcards, u8 *result)
   u32 repeat;
   u32 i;
   gui_action_type gui_action;
+#if defined(NSPIRE_LIBRETRO)
+  s32 moving = -1;               /* the game being moved (tab), or -1 */
+  s32 moving_from = 0;
+  u8 **order_before = NULL;      /* the list before the move, for esc */
+  char list_status[60] = "";     /* what the last key did, until the next */
+
+  /* The number keys start games here instead of moving. */
+  nspire_gui_digits_move = 0;
+#endif
 
   while(return_value == 1)
   {
@@ -325,6 +341,13 @@ s32 load_file(u8 **wildcards, u8 *result)
     qsort((void *)dir_list, num_dirs, sizeof(u8 *), sort_function);
 #endif
     closedir(current_dir);
+#if defined(NSPIRE_LIBRETRO)
+    game_list_sort((char **)file_list, num_files);
+    game_list_sort((char **)dir_list, num_dirs);
+    game_list_apply_order((char **)file_list, num_files, (char *)current_dir_name);
+    moving = -1;
+    order_before = (u8 **)malloc(sizeof(u8 *) * (num_files ? num_files : 1));
+#endif
 
     current_dir_length = strlen(current_dir_name);
 
@@ -353,8 +376,13 @@ s32 load_file(u8 **wildcards, u8 *result)
 
     repeat = 1;
 
+#if defined(NSPIRE_LIBRETRO)
+    /* A folder just opened starts on its first game, if it has one. */
+    current_column = num_files == 0;
+#else
     if(num_files == 0)
       current_column = 1;
+#endif
 
     clear_screen(COLOR_BG);
   {
@@ -375,6 +403,21 @@ s32 load_file(u8 **wildcards, u8 *result)
 #ifdef GP2X_BUILD
       print_string("Press X to return to the main menu.",
        COLOR_HELP_TEXT, COLOR_BG, 20, 220);
+#elif defined(NSPIRE_LIBRETRO)
+      if(moving >= 0)
+      {
+        print_string("Moving it: up/down, then enter to put it there,",
+         COLOR_HELP_TEXT, COLOR_BG, 20, 220);
+        print_string("or esc to put it back.", COLOR_HELP_TEXT, COLOR_BG, 20, 230);
+      }
+      else
+      {
+        print_string(list_status[0] ? list_status :
+         "enter or 1-9, 0: start  shift: without its state",
+         COLOR_HELP_TEXT, COLOR_BG, 20, 220);
+        print_string("tab: move a game  shift+tab: A to Z  menu: back",
+         COLOR_HELP_TEXT, COLOR_BG, 20, 230);
+      }
 #elif defined(NSPIRE_BUILD)
 	  print_string("Press menu to return to the main menu.",
        COLOR_HELP_TEXT, COLOR_BG, 20, 220);
@@ -388,6 +431,23 @@ s32 load_file(u8 **wildcards, u8 *result)
       {
         if(current_file_number < num_files)
         {
+#if defined(NSPIRE_LIBRETRO)
+          /* The first ten start with their number key, shown before them. */
+          char row[100];
+          u16 color = COLOR_INACTIVE_ITEM;
+
+          if((s32)current_file_number == moving)
+            color = COLOR_MOVING;
+          else if((current_file_number == current_file_selection) &&
+           (current_column == 0))
+            color = COLOR_ACTIVE_ITEM;
+          if(current_file_number < 10)
+            snprintf(row, sizeof(row), "%u %s", (current_file_number + 1) % 10,
+             (char *)file_list[current_file_number]);
+          else
+            snprintf(row, sizeof(row), "  %s", (char *)file_list[current_file_number]);
+          print_string(row, color, COLOR_BG, FILE_LIST_POSITION, ((i + 1) * 10));
+#else
           if((current_file_number == current_file_selection) &&
            (current_column == 0))
           {
@@ -399,6 +459,7 @@ s32 load_file(u8 **wildcards, u8 *result)
             print_string(file_list[current_file_number], COLOR_INACTIVE_ITEM,
              COLOR_BG, FILE_LIST_POSITION, ((i + 1) * 10));
           }
+#endif
         }
       }
 
@@ -422,6 +483,89 @@ s32 load_file(u8 **wildcards, u8 *result)
       }
 
       gui_action = get_gui_input();
+
+#if defined(NSPIRE_LIBRETRO)
+      {
+        s32 digit = nspire_digit_pressed();
+        int tab = key_pressed(KEY_TAB);
+
+        if(gui_action != CURSOR_NONE || digit >= 0 || tab)
+          list_status[0] = 0;
+
+        if(moving >= 0)
+        {
+          /* Up/down carry the game (the selection follows it below), enter
+           * or tab puts it there, esc (or menu) puts it back. */
+          if(tab)
+            gui_action = CURSOR_SELECT;
+          switch(gui_action)
+          {
+            case CURSOR_UP:
+              if(current_file_selection > 0)
+                game_list_move((char **)file_list, num_files, current_file_selection,
+                 current_file_selection - 1);
+              else
+                gui_action = CURSOR_NONE;
+              break;
+
+            case CURSOR_DOWN:
+              if(current_file_selection < (s32)num_files - 1)
+                game_list_move((char **)file_list, num_files, current_file_selection,
+                 current_file_selection + 1);
+              else
+                gui_action = CURSOR_NONE;
+              break;
+
+            case CURSOR_SELECT:
+              if(!game_list_save_order((char **)file_list, num_files,
+               (char *)current_dir_name))
+                snprintf(list_status, sizeof(list_status), "Couldn't save the order.");
+              moving = -1;
+              gui_action = CURSOR_NONE;
+              break;
+
+            case CURSOR_BACK:
+            case CURSOR_EXIT:
+              memcpy(file_list, order_before, sizeof(u8 *) * num_files);
+              current_file_selection = moving_from;
+              /* Keep it on the screen. */
+              if(current_file_selection < current_file_scroll_value)
+                current_file_scroll_value = current_file_selection;
+              else if(current_file_selection >= current_file_scroll_value + FILE_LIST_ROWS)
+                current_file_scroll_value = current_file_selection - FILE_LIST_ROWS + 1;
+              current_file_in_scroll = current_file_selection - current_file_scroll_value;
+              moving = -1;
+              if(gui_action == CURSOR_BACK)
+                gui_action = CURSOR_NONE;
+              break;
+
+            default:
+              gui_action = CURSOR_NONE;
+              break;
+          }
+        }
+        else if(digit >= 0 && digit < (s32)num_files)
+        {
+          current_file_selection = digit;
+          current_column = 0;
+          gui_action = CURSOR_SELECT;
+        }
+        else if(tab && current_column == 0 && num_files > 1 && order_before)
+        {
+          if(key_down(KEY_SHIFT))
+          {
+            game_list_forget_order((char *)current_dir_name);
+            game_list_sort((char **)file_list, num_files);
+            snprintf(list_status, sizeof(list_status), "Sorted A to Z.");
+          }
+          else
+          {
+            memcpy(order_before, file_list, sizeof(u8 *) * num_files);
+            moving = moving_from = current_file_selection;
+          }
+        }
+      }
+#endif
 
       switch(gui_action)
       {
@@ -581,6 +725,9 @@ s32 load_file(u8 **wildcards, u8 *result)
               repeat = 0;
               return_value = 0;
               strcpy(result, file_list[current_file_selection]);
+#if defined(NSPIRE_LIBRETRO)
+              nspire_skip_state_load = key_down(KEY_SHIFT);
+#endif
             }
           }
           break;
@@ -603,6 +750,10 @@ s32 load_file(u8 **wildcards, u8 *result)
           repeat = 0;
           break;
       }
+#if defined(NSPIRE_LIBRETRO)
+      if(moving >= 0)
+        moving = current_file_selection;
+#endif
     }
   }
 
@@ -611,6 +762,10 @@ s32 load_file(u8 **wildcards, u8 *result)
       free(file_list[i]);
     }
     free(file_list);
+#if defined(NSPIRE_LIBRETRO)
+    free(order_before);
+    order_before = NULL;
+#endif
 
     for(i = 0; i < num_dirs; i++)
     {
@@ -620,6 +775,9 @@ s32 load_file(u8 **wildcards, u8 *result)
   }
 
   clear_screen(COLOR_BG);
+#if defined(NSPIRE_LIBRETRO)
+  nspire_gui_digits_move = 1;
+#endif
 
   return return_value;
 }
@@ -630,7 +788,8 @@ typedef enum
   STRING_SELECTION_OPTION = 0x02,
   SUBMENU_OPTION          = 0x04,
   ACTION_OPTION           = 0x08,
-  KEY_SELECTION_OPTION    = 0x10
+  KEY_SELECTION_OPTION    = 0x10,
+  KEY_BINDING_OPTION      = 0x20   /* Nspire: an action's two key bindings */
 } menu_option_type_enum;
 
 struct _menu_type
@@ -697,19 +856,29 @@ typedef struct _menu_type menu_type;
 }                                                                             \
 
 #ifdef NSPIRE_BUILD
-#define key_config_option(number, display_string, help)                       \
+/* A line of "Configure input": an action (in num_options) and its two key
+ * bindings (nspire_keys.h). */
+#define binding_option(action, line_number)                                   \
 {                                                                             \
-  choose_key,                                                                 \
-  NULL,                                                                       \
-  NULL,                                                                       \
-  display_string,                                                             \
-  nspire_key_strings,                                                         \
-  gamepad_config_map + number,                                                \
-  0,                                                                          \
-  help,                                                                       \
-  number-1,                                                                   \
-  ACTION_OPTION                                                               \
-} 
+  NULL, NULL, NULL, NULL, NULL, NULL, action,                                 \
+  "Left/right: key 1 or 2. Enter: set it (hold a key\n"                       \
+  "and press another for a combination). del: clear.",                       \
+  line_number, KEY_BINDING_OPTION                                             \
+}
+
+/* The main menu's slot lines, and the last line of options on the screen
+ * (y 200): longer menus scroll. */
+#define LOAD_SLOT_LINE 3
+#define SAVE_SLOT_LINE 4
+#define MENU_LAST_LINE 16
+#endif
+
+#if defined(NSPIRE_LIBRETRO)
+#define MENU_SLOTS STATE_SLOTS
+#else
+#define MENU_SLOTS 10
+#define LOAD_SLOT_LINE 3
+#define SAVE_SLOT_LINE 4
 #endif
   
 #define cheat_option(number)                                                  \
@@ -837,18 +1006,8 @@ u32 gamepad_config_line_to_button[] =
 u32 gamepad_config_line_to_button[] =
  { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 };
 
-char *nspire_key_strings[] =
-{
-    "NONE",
-	"return", "enter", NULL, "(-)", "space", "Z", "Y", "0", "?!", "home", NULL, NULL, NULL, NULL, NULL, NULL,
-    "X", "W", "V", "3", "U", "T", "S", "1", "pi", "trig", "10^x", NULL, NULL, NULL, NULL, NULL,
-    "R", "Q", "P", "6", "O", "N", "M", "4", "EE", "x^2", NULL, NULL, NULL, NULL, NULL, NULL,
-    "L", "K", "J", "9", "I", "H", "G", "7", "/", "e^x", NULL, NULL, NULL, NULL, NULL, NULL,
-    "F", "E", "D", NULL, "C", "B", "A", "=", "*", "^", NULL, NULL, NULL, NULL, NULL, NULL,
-    NULL, "var", "-", ")", ".", "(", "5", "cat", "frac", "del", "scratch", NULL, NULL, NULL, NULL, NULL,
-    "flag", "click", "+", "doc", "2", "menu", "8", "esc", NULL, "tab", NULL, NULL, NULL, NULL, NULL, NULL,
-    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "shift", "ctrl", ",", NULL, NULL, NULL, NULL, NULL
-};
+/* Key names, by gpSP's key numbers (nspire_keys.c). */
+extern char *nspire_key_strings[];
  
 #endif
 
@@ -858,7 +1017,7 @@ u8 *scale_options[] =
   "unscaled 3:2", "scaled 3:2 (slower)",
   "unscaled 3:2 (anti-tear)", "scaled 3:2 (anti-tear)"
 #elif NSPIRE_BUILD
-  "unscaled 3:2 (fastest)", "scaled/blended 3:2 (slowest)", "fullscreen/blended (slower)", "scaled/unblended 3:2 (fast)"
+  "unscaled 3:2 (small)", "scaled/blended 3:2 (slowest)", "fullscreen/blended (slower)", "scaled/unblended 3:2 (fast)"
 #else
   "unscaled 3:2", "scaled 3:2", "fullscreen", "scaled 3:2 (software)"
 #ifdef PSP_BUILD
@@ -867,6 +1026,30 @@ u8 *scale_options[] =
 #endif
 };
 
+#if defined(NSPIRE_LIBRETRO)
+
+/* gpSP's settings files: see nspire_config.c. */
+s32 load_game_config_file()
+{
+  return 0;   /* a game's own settings open with it (nspire_start_game) */
+}
+
+s32 load_config_file()
+{
+  return nspire_config_load();
+}
+
+s32 save_game_config_file()
+{
+  return 0;   /* written with save_config_file */
+}
+
+s32 save_config_file()
+{
+  return nspire_config_save();
+}
+
+#else
 s32 load_game_config_file()
 {
   u8 game_config_filename[512];
@@ -1332,6 +1515,7 @@ s32 save_config_file()
 
   return -1;
 }
+#endif
 
 typedef enum
 {
@@ -1347,31 +1531,17 @@ u32 savestate_slot = 0;
 void get_savestate_snapshot(u8 *savestate_filename)
 {
 #ifdef NSPIRE_BUILD
-  /* Host save files are raw BSON blobs (GBA_STATE_MEM_SIZE), not snapshot+time. */
   FILE *fp = fopen((char *)savestate_filename, "rb");
-  long sz;
 
-  if (!fp)
+  if (fp)
   {
-    print_string("No savestate in this slot.          ", COLOR_HELP_TEXT,
-     COLOR_BG, 10, 40);
-    return;
-  }
-  fseek(fp, 0, SEEK_END);
-  sz = ftell(fp);
-  fclose(fp);
-#if defined(NSPIRE_LIBRETRO)
-  if (sz == (long)GBA_STATE_MEM_SIZE)
+    fclose(fp);
     print_string("Savestate present in this slot.     ", COLOR_HELP_TEXT,
      COLOR_BG, 10, 40);
+  }
   else
-    print_string("No valid savestate (wrong size).    ", COLOR_HELP_TEXT,
+    print_string("No savestate in this slot.          ", COLOR_HELP_TEXT,
      COLOR_BG, 10, 40);
-#else
-  (void)sz;
-  print_string("(savestate slot)                    ", COLOR_HELP_TEXT,
-   COLOR_BG, 10, 40);
-#endif
 #else
   static u16 snapshot_buffer[240 * 160];
   u8 savestate_timestamp_string[80];
@@ -1420,20 +1590,15 @@ void get_savestate_snapshot(u8 *savestate_filename)
 
 void get_savestate_filename(u32 slot, u8 *name_buffer)
 {
-  u8 savestate_ext[16];
-
-#ifdef NSPIRE_BUILD
-  sprintf(savestate_ext, "%d.svs.tns", slot);
-#else
-  sprintf(savestate_ext, "%d.svs", slot);
-#endif
-  change_ext(gamepak_filename, name_buffer, savestate_ext);
-
+  get_savestate_filename_noshot(slot, name_buffer);
   get_savestate_snapshot(name_buffer);
 }
 
 void get_savestate_filename_noshot(u32 slot, u8 *name_buffer)
 {
+#if defined(NSPIRE_LIBRETRO)
+  states_file_name((int)slot, (char *)name_buffer, 512);
+#else
   u8 savestate_ext[16];
 #ifdef NSPIRE_BUILD
   sprintf(savestate_ext, "%d.svs.tns", slot);
@@ -1441,6 +1606,7 @@ void get_savestate_filename_noshot(u32 slot, u8 *name_buffer)
   sprintf(savestate_ext, "%d.svs", slot);
 #endif
   change_ext(gamepak_filename, name_buffer, savestate_ext);
+#endif
 }
 
 #ifdef PSP_BUILD
@@ -1475,45 +1641,49 @@ u32 menu(u16 *original_screen)
   auto void clear_help();
 
 #ifdef NSPIRE_BUILD
-  void show_key()
+  u32 key_column = 0;          /* the key picked with left/right on key lines */
+  u32 current_option_y = 0;
+  char menu_status[80] = "";   /* what the last action did */
+  u8 *settings_for_options[] = { "all games", "this game only" };
+
+  void menu_reset_keys()
   {
-    strcpy(&current_option->display_string[14], nspire_key_strings[*current_option->current_option]);
+    keys_set_defaults(key_bindings);
+    snprintf(menu_status, sizeof(menu_status), "Keys reset to gpSP's defaults.");
   }
-  
-  void choose_key()
-  {
-	print_string("<press a key>", COLOR_ACTIVE_ITEM, COLOR_BG, 10 + 14*FONT_WIDTH, current_option->line_number * 10 + 40);
-	flip_screen();
-	update_at_vblank();
-	u32 key_pressed = key_scan();
-	//print_string("             ", COLOR_BG, COLOR_BG, 10 + 14*FONT_WIDTH, current_option->line_number * 10 + 40);
-	
-	if (key_pressed <= 128 && nspire_key_strings[key_pressed])
-		*current_option->current_option = key_pressed;
-	else
-		*current_option->current_option = 0;
-	show_key();
-  };
-  
+
   menu_option_type gamepad_config_options[] =
   {
-    key_config_option( 0, "D-pad up             ", "Up button on GBA d-pad."),
-    key_config_option( 1, "D-pad down           ", "Down button on GBA d-pad."),
-    key_config_option( 2, "D-pad left           ", "Left button on GBA d-pad."),
-    key_config_option( 3, "D-pad right          ", "Right button on GBA d-pad."),
-    key_config_option( 4, "A                    ", "A button on GBA."),
-    key_config_option( 5, "B                    ", "B button on GBA."),
-    key_config_option( 6, "Left Trigger         ", "Left shoulder button on GBA."),
-    key_config_option( 7, "Right Trigger        ", "Right shoulder button on GBA."),
-    key_config_option( 8, "Start                ", "Start button on GBA."),
-    key_config_option( 9, "Select               ", "Select button on GBA."),
-    key_config_option(10, "Menu                 ", "Brings up the options menu."),
-	key_config_option(11, "Fast Forward         ", "Toggles fastforward on/off."),
-	key_config_option(12, "Load State           ", "Loads the game state from the current slot."),
-	key_config_option(13, "Save State           ", "Saves the game state to the current slot."),
-	key_config_option(14, "Save+Exit            ", "Saves a state and exits; will be auto-loaded later."),
-	
-    submenu_option(NULL, "Back", "Return to the main menu.", 15)
+    binding_option(ACTION_UP, 0),
+    binding_option(ACTION_DOWN, 1),
+    binding_option(ACTION_LEFT, 2),
+    binding_option(ACTION_RIGHT, 3),
+    binding_option(ACTION_A, 4),
+    binding_option(ACTION_B, 5),
+    binding_option(ACTION_L, 6),
+    binding_option(ACTION_R, 7),
+    binding_option(ACTION_START, 8),
+    binding_option(ACTION_SELECT, 9),
+    binding_option(ACTION_MENU, 10),
+    binding_option(ACTION_FAST_FORWARD, 11),
+    binding_option(ACTION_LOAD_STATE, 12),
+    binding_option(ACTION_SAVE_STATE, 13),
+    binding_option(ACTION_QUIT, 14),
+    binding_option(ACTION_LOAD_NEWEST, 15),
+    binding_option(ACTION_NEXT_SLOT, 16),
+    binding_option(ACTION_PREVIOUS_SLOT, 17),
+    binding_option(ACTION_SHOW_FPS, 18),
+    binding_option(ACTION_RESTART, 19),
+    binding_option(ACTION_BRIGHTER, 20),
+    binding_option(ACTION_DIMMER, 21),
+    string_selection_option(nspire_config_keys_for_changed, "Keys for",
+     settings_for_options, &nspire_keys_for, 2,
+     "All games, or this game only: the game keeps its\n"
+     "own keys.", 23),
+    action_option(menu_reset_keys, NULL, "Reset keys to defaults",
+     "8 5 4 6, del A, var B, scratch L, doc R, shift\n"
+     "Start, ctrl Select, menu, F, L, S, Q, + and -.", 24),
+    submenu_option(NULL, "Back", "Return to the main menu.", 26)
   };
 
 
@@ -1569,6 +1739,10 @@ u32 menu(u16 *original_screen)
   void menu_quit()
   {
     menu_get_clock_speed();
+#if defined(NSPIRE_LIBRETRO)
+    if(!first_load)
+      nspire_quit_game();
+#endif
     save_config_file();
     quit();
   }
@@ -1576,11 +1750,37 @@ u32 menu(u16 *original_screen)
   void menu_load()
   {
 #ifdef NSPIRE_BUILD
-	u8 *file_ext[] = { ".gba.tns", NULL };
+	u8 *file_ext[] = { ".gba.tns", ".gbz.tns", ".zip.tns", NULL };
 #else
 	u8 *file_ext[] = { ".gba", ".bin", ".zip", NULL };
 #endif
     u8 load_filename[512];
+#if defined(NSPIRE_LIBRETRO)
+    if(load_file(file_ext, load_filename) != -1)
+    {
+      if(!first_load)
+        nspire_leave_game();
+      if(!nspire_start_game((char *)load_filename))
+      {
+        /* It said why. The last game is closed: the menu is without one. */
+        gamepak_filename[0] = 0;
+        first_load = 1;
+        memset(original_screen, 0x00, 240 * 160 * 2);
+        print_string_ext("No game loaded yet.", 0xFFFF, 0x0000,
+         60, 75, original_screen, 240, 0, 0, FONT_HEIGHT);
+        choose_menu(current_menu);
+        return;
+      }
+      first_load = 0;
+      return_value = 1;
+      repeat = 0;
+      menu_update_clock();
+    }
+    else
+    {
+      choose_menu(current_menu);
+    }
+#else
     save_game_config_file();
 #if defined(NSPIRE_LIBRETRO)
     nspire_apply_bios();
@@ -1627,6 +1827,7 @@ u32 menu(u16 *original_screen)
     {
       choose_menu(current_menu);
     }
+#endif
   }
 
   void menu_restart()
@@ -1641,6 +1842,7 @@ u32 menu(u16 *original_screen)
       nspire_frameskip_reset();
       instruction_count = 0;
       reg[OAM_UPDATED] = 1;
+      nspire_osd_message("Game restarted");
 #else
       reg[CHANGED_PC_STATUS] = 1;
 #endif
@@ -1654,6 +1856,56 @@ u32 menu(u16 *original_screen)
     get_savestate_filename(savestate_slot, current_savestate_filename);
   }
 
+#if defined(NSPIRE_LIBRETRO)
+  void menu_save_state()
+  {
+    int slot;
+
+    if(first_load)
+      return;
+    slot = nspire_save_target();
+    if(slot < 0)
+      snprintf(menu_status, sizeof(menu_status), "All 1000 slots are used.");
+    else if(states_save(slot))
+    {
+      savestate_slot = (u32)slot;
+      snprintf(menu_status, sizeof(menu_status), "Saved slot %03d.", slot);
+    }
+    else
+      snprintf(menu_status, sizeof(menu_status), "Couldn't save slot %03d. Out of space?", slot);
+  }
+
+  void menu_load_state()
+  {
+    int result;
+
+    if(first_load)
+      return;
+    result = states_load((int)savestate_slot);
+    if(result == 1)
+    {
+      nspire_osd_message("Loaded slot %03d", (int)savestate_slot);
+      nspire_frameskip_reset();
+      return_value = 1;
+      repeat = 0;
+    }
+    else
+      snprintf(menu_status, sizeof(menu_status), result == 0 ? "Slot %03d is empty." :
+               "Couldn't load slot %03d.", (int)savestate_slot);
+  }
+
+  void menu_speed_test()
+  {
+    if(!first_load)
+      nspire_speed_test();
+  }
+
+  void menu_save_manager()
+  {
+    if(!first_load)
+      nspire_save_manager();
+  }
+#else
   void menu_save_state()
   {
     if(!first_load)
@@ -1679,6 +1931,7 @@ u32 menu(u16 *original_screen)
       }
     }
   }
+#endif
 
   void menu_load_state_file()
   {
@@ -1707,7 +1960,7 @@ u32 menu(u16 *original_screen)
 
   void menu_fix_gamepad_help()
   {
-#ifndef PC_BUILD
+#if !defined(PC_BUILD) && !defined(NSPIRE_BUILD)
     clear_help();
     current_option->help_string =
      gamepad_help[gamepad_config_map[
@@ -1727,12 +1980,6 @@ u32 menu(u16 *original_screen)
 
   void submenu_gamepad()
   {
-#ifdef NSPIRE_BUILD
-	for(i = 0; i < 15; i++)
-	{
-	  strcpy(&gamepad_config_options[i].display_string[14], nspire_key_strings[*gamepad_config_options[i].current_option]);
-	}
-#endif
   }
 
   void submenu_analog()
@@ -1750,6 +1997,12 @@ u32 menu(u16 *original_screen)
   {
     print_string("gpsp-libretro for nSpire (Alpha v0.4.1)", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 10);
     print_string("by andymcca", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 20);
+#if defined(NSPIRE_LIBRETRO)
+    print_string("+ tear-free CX II output, 1000 save slots,", COLOR_INACTIVE_ITEM, COLOR_BG, 10, 40);
+    print_string("  compressed states and ROMs (.gbz), hotkeys,", COLOR_INACTIVE_ITEM, COLOR_BG, 10, 50);
+    print_string("  settings per game, CPU speed, brightness,", COLOR_INACTIVE_ITEM, COLOR_BG, 10, 60);
+    print_string("  number keys and your own order in the list", COLOR_INACTIVE_ITEM, COLOR_BG, 10, 70);
+#endif
     print_string("Credits:", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 90);
     print_string("Exophase", COLOR_INACTIVE_ITEM, COLOR_BG, 10, 100);
     print_string("David G.F.", COLOR_INACTIVE_ITEM, COLOR_BG, 10, 110);
@@ -1761,7 +2014,13 @@ u32 menu(u16 *original_screen)
   {
     if (*gamepak_filename)
 	{
+#if defined(NSPIRE_LIBRETRO)
+		/* The ROM's file name: its path is absolute, and too long. */
+		const char *slash = strrchr(gamepak_filename, '/');
+		snprintf((char *)print_buffer, sizeof(print_buffer), "%s", slash ? slash + 1 : gamepak_filename);
+#else
 		strncpy(print_buffer, gamepak_filename, 80);
+#endif
 		print_string(print_buffer, COLOR_ROM_INFO, COLOR_BG, 10, 10);
 		sprintf(print_buffer, "%s  %s  %s", gamepak_title,
 		 gamepak_code, gamepak_maker);
@@ -1794,10 +2053,15 @@ u32 menu(u16 *original_screen)
   u8 *nspire_rtc_options[] = { "auto", "enabled", "disabled" };
   u8 *nspire_frame_mix_options[] = { "disabled", "enabled" };
   u8 *nspire_lcd_cache_options[] = { "Range D-clean", "Full clean_dcache" };
-  u8 *nspire_fps_overlay_options[] = { "Off", "On" };
+  u8 *nspire_fps_overlay_options[] = { "off", "on", "detailed" };
   u8 *nspire_gba_blend_options[] = { "On", "Off (fast)" };
   u8 *nspire_video_renderer_options[] = { "libretro video.cc", "legacy old_video/video.c" };
   u8 *nspire_dynarec_ram_policy_options[] = { "Partial SMC (default)", "Classic (full flush on SMC)" };
+  u8 *brightness_options[] = { "calculator's", "1 (dimmest)", "2", "3", "4", "5", "6", "7",
+   "8", "9", "10 (brightest)" };
+  u8 *cpu_speed_options[] = { "normal", "408 MHz", "420 MHz", "432 MHz", "444 MHz", "456 MHz",
+   "468 MHz", "480 MHz", "492 MHz", "504 MHz" };
+  u8 *off_on_options[] = { "off", "on" };
 #endif
 
 #ifndef PSP_BUILD
@@ -1856,7 +2120,19 @@ u32 menu(u16 *original_screen)
      "aspect ratio scaled to fill the height of the PSP screen, and\n"
      "fullscreen to fill the entire PSP screen."
 #endif
+#if defined(NSPIRE_LIBRETRO)
+     "Scaled/unblended is the sharp 320x214 picture.\n"
+     "Blended ones are smoother and slower; unscaled is\n"
+     "the GBA's own 240x160 in the middle."
+#endif
      "", 2),
+#if defined(NSPIRE_LIBRETRO)
+    string_selection_option(nspire_brightness_apply, "Screen brightness",
+     brightness_options, &nspire_brightness, BRIGHTNESS_LEVELS + 1,
+     "The backlight while gpSP runs (CX II); the\n"
+     "calculator's own comes back when gpSP closes.\n"
+     "In a game: + and - (Configure input).", 3),
+#endif
 #if !defined(GP2X_BUILD) && !defined(NSPIRE_BUILD)
     string_selection_option(NULL, "Screen filtering", yes_no_options,
      (u32 *)(&screen_filter), 2,
@@ -1868,31 +2144,36 @@ u32 menu(u16 *original_screen)
 #if defined(NSPIRE_BUILD)
     string_selection_option(NULL, "Frameskip type", frameskip_options,
      (u32 *)(&current_frameskip_type), 3,
-     "Off: no frameskip. Auto: skip when ahead of the LCD (original gpSP).\n"
-     "Manual: draw 1 of every N+1 frames.", 5),
+     "Automatic: skip drawing only when the game falls\n"
+     "behind. Manual: draw 1 in N+1. Off: draw them all.", 5),
     numeric_selection_option(NULL, "Frameskip value", &frameskip_value, 100,
-     "Auto: max consecutive skips. Manual: N skipped per N+1 frames.", 6),
+     "Automatic: the most frames skipped in a row.\n"
+     "Manual: N frames skipped for each one drawn.", 6),
     string_selection_option(NULL, "Frameskip variation",
      frameskip_variation_options, &random_skip, 2,
-     "Random timing for manual skip can reduce flicker beat with manual.", 7),
+     "Manual frameskip at random times: can stop\n"
+     "things that flicker from disappearing.", 7),
 #if defined(NSPIRE_LIBRETRO)
     string_selection_option(NULL, "LCD framebuffer cache",
      nspire_lcd_cache_options, &nspire_lcd_cache_clean_full, 2,
-     "Before the display swap: range D-clean of the 320x240 RGB buffer (fast),\n"
-     "or full clean_dcache if you see corruption or want to compare.", 8),
+     "Landscape LCDs only (not the CX II): how a frame\n"
+     "leaves the cache before it is shown. Full if you\n"
+     "see corruption.", 8),
     string_selection_option(NULL, "Show FPS counter",
-     nspire_fps_overlay_options, &nspire_fps_overlay, 2,
-     "Draws actual/expected visible FPS (e.g. 16/20) after scaling.\n"
-     "Expected follows frameskip (manual uses ~60/(N+1); auto uses ~60).\n"
-     "Timing from hardware; may be coarse on some models.", 9),
+     nspire_fps_overlay_options, &nspire_fps_overlay, 3,
+     "Frames drawn a second / the most there can be.\n"
+     "Detailed: ms per frame running the game, drawing,\n"
+     "showing it (also logged to gpsp_perf.txt).", 9),
     string_selection_option(NULL, "GBA blending (BLDCNT)",
      nspire_gba_blend_options, &nspire_gba_blend_off, 2,
-     "On: accurate alpha between layers, fades, and semi-transparent OBJ.\n"
-     "Off (fast): skips those passes (modes 0-2 and 4 only); wrong in many games.", 10),
+     "On: see-through layers, fades and sprites drawn\n"
+     "properly. Off (fast): skips them (modes 0-2 and\n"
+     "4); wrong in many games.", 10),
     string_selection_option(NULL, "Video renderer",
      nspire_video_renderer_options, &nspire_video_renderer_choice, 2,
      "libretro video.cc is the default renderer.\n"
-     "legacy old_video/video.c can be faster in some scenes and uses video_blend.S.", 11),
+     "legacy old_video/video.c can be faster in some\n"
+     "scenes (uses video_blend.S).", 11),
 #endif
 #elif !defined(GP2X_BUILD)
     string_selection_option(NULL, "Frameskip type", frameskip_options,
@@ -1947,11 +2228,57 @@ u32 menu(u16 *original_screen)
 #endif
      10),
 #endif
+#if defined(NSPIRE_LIBRETRO)
+    action_option(menu_speed_test, NULL, "Run speed test",
+     "Runs the game from here for 20 seconds, three\n"
+     "ways, and shows where the time goes; then it's\n"
+     "put back. Results: gpsp_results.txt.", 13),
+    submenu_option(NULL, "Back", "Return to the main menu.", 15)
+#else
     submenu_option(NULL, "Back", "Return to the main menu.", 12)
+#endif
   };
 
   make_menu(graphics_sound, submenu_graphics_sound, NULL);
 
+#if defined(NSPIRE_LIBRETRO)
+  menu_option_type cheats_misc_options[] =
+  {
+    cheat_option(0),
+    cheat_option(1),
+    cheat_option(2),
+    cheat_option(3),
+    cheat_option(4),
+    cheat_option(5),
+    cheat_option(6),
+    cheat_option(7),
+    cheat_option(8),
+    cheat_option(9),
+    string_selection_option(NULL, "Auto-increment slot on save", off_on_options,
+     &nspire_auto_increment, 2,
+     "On: every save goes to a new slot after the\n"
+     "highest, so nothing is overwritten. Off: saves\n"
+     "go to the slot picked.", 10),
+    string_selection_option(NULL, "Save a state when leaving", off_on_options,
+     &nspire_save_on_exit, 2,
+     "Save+Exit, Exit gpSP and Load new game save a\n"
+     "state first, to carry on from there next time.", 11),
+    string_selection_option(NULL, "Load newest state on start", off_on_options,
+     &nspire_load_on_start, 2,
+     "Starting a game loads its newest state. To start\n"
+     "without it once: shift+enter in the file list.", 12),
+    string_selection_option(NULL, "Update backup",
+     update_backup_options, &update_backup_flag, 2,
+     "When in-game saves are written: automatically, a\n"
+     "moment after the game saves, or only when leaving.", 13),
+    string_selection_option(NULL, "Compress saves", off_on_options,
+     &nspire_compress_saves, 2,
+     "New states and in-game saves (.sav.gz) packed\n"
+     "small. Off: as they are, for other emulators.\n"
+     "Save manager (main menu) changes old ones.", 14),
+    submenu_option(NULL, "Back", "Return to the main menu.", 15)
+  };
+#else
   menu_option_type cheats_misc_options[] =
   {
     cheat_option(0),
@@ -1990,6 +2317,7 @@ u32 menu(u16 *original_screen)
      12),
     submenu_option(NULL, "Back", "Return to the main menu.", 14)
   };
+#endif
 
   make_menu(cheats_misc, submenu_cheats_misc, NULL);
 
@@ -2034,32 +2362,44 @@ u32 menu(u16 *original_screen)
 
   menu_option_type emulator_options[] =
   {
+    string_selection_option(nspire_config_settings_for_changed, "Settings for",
+     settings_for_options, &nspire_settings_for, 2,
+     "All games, or this game only: the game keeps\n"
+     "its own graphics, emulator and save state\n"
+     "options.", 0),
     numeric_selection_option(nspire_clamp_rom_buffer_size, "ROM buffer size (MiB)",
      &nspire_rom_buffer_size_choice, 33,
-     "Runtime ROM page cache target in MiB.\n"
-     "Valid range is 2..32. Lower values reduce RAM use but increase swapping.", 2),
+     "ROM page cache in MiB (2 to 32). Lower values\n"
+     "use less RAM but read the ROM file more often.", 2),
     string_selection_option(NULL, "GBA BIOS source", bios_source_options,
      &nspire_bios_choice, 2,
-     "Built-in: open replacement BIOS in the core. File: place\n"
-     "gba_bios.bin.tns next to this program (official Nintendo dump).\n"
-     "Applies when you load or restart a game.", 3),
+     "Built-in: the open BIOS in gpSP. File: the\n"
+     "official one, gba_bios.bin.tns next to gpSP.\n"
+     "Applies when a game is loaded or restarted.", 3),
     string_selection_option(NULL, "No sprite limit", nspire_sprlim_options,
      &nspire_sprlim_choice, 2,
-     "Matches RetroArch gpsp_sprlim: disabled = 128 sprite cap;\n"
-     "enabled = draw all sprites (may be slower).", 4),
+     "Disabled: the 128 sprite cap, as on a GBA.\n"
+     "Enabled: all sprites drawn (may be slower).\n"
+     "As RetroArch's gpsp_sprlim.", 4),
     string_selection_option(NULL, "RTC", nspire_rtc_options,
      &nspire_rtc_choice, 3,
-     "Real-time clock override (gpsp_rtc). Auto uses game database.\n"
-     "Takes effect the next time a game is loaded from disk.", 5),
+     "The cartridge's real-time clock (gpsp_rtc).\n"
+     "Auto: for the games known to have one. Applies\n"
+     "the next time a game is loaded.", 5),
     string_selection_option(NULL, "Interframe blending", nspire_frame_mix_options,
      &nspire_frame_mix_choice, 2,
-     "gpsp_frame_mixing: blends this frame with the previous one\n"
-     "(LCD-style ghosting).", 6),
+     "Blends each frame with the one before, like the\n"
+     "GBA LCD's ghosting (libretro gpsp_frame_mixing).", 6),
     string_selection_option(nspire_dynarec_ram_policy_menu_hook, "Dynarec RAM / SMC",
      nspire_dynarec_ram_policy_options, &nspire_dynarec_ram_policy, 2,
-     "Partial SMC: only invalidate affected RAM code (faster).\n"
-     "Classic: flush ROM+RAM dynarec on SMC and use full block linking\n"
-     "(ROM/ RAM targets) like non-RAM blocks; slower but matches old gpSP.", 7),
+     "Partial SMC: code a game rewrites in RAM is\n"
+     "retranslated alone (faster). Classic: all of it\n"
+     "is flushed, as in old gpSP (slower).", 7),
+    string_selection_option(NULL, "CPU speed (CX II)", cpu_speed_options,
+     &nspire_cpu_speed, CPU_SPEEDS,
+     "Raised while a game runs; normal is 396 MHz (288\n"
+     "on USB). Try 432 first: faster ones can freeze.\n"
+     "A speed that froze goes back to normal next start.", 9),
     submenu_option(NULL, "Back", "Return to the main menu.", 13)
   };
 
@@ -2159,11 +2499,12 @@ u32 menu(u16 *original_screen)
   {
 #ifdef NSPIRE_BUILD
 	submenu_option(&graphics_sound_menu, "Graphics options",
-     "Select to set display scale, frameskip,\n"
-     "LCD cache, FPS overlay, blending, and renderer.", 0),
+     "Display scale, frameskip, FPS counter, blending,\n"
+     "renderer, and the speed test.", 0),
 #if defined(NSPIRE_LIBRETRO)
 	submenu_option(&emulator_menu, "Emulator options",
-     "BIOS, sprite limit, RTC, and interframe blending.", 1),
+     "Settings for all games or this one, BIOS, sprite\n"
+     "limit, RTC, interframe blending, CPU speed.", 1),
 #endif
 #else
     submenu_option(&graphics_sound_menu, "Graphics and Sound options",
@@ -2171,15 +2512,19 @@ u32 menu(u16 *original_screen)
      "behavior, audio on/off, buffer size, and filtering.", 0),
 #endif
     numeric_selection_action_option(menu_load_state, NULL,
-     "Load state from slot", &savestate_slot, 10,
-     "Select to load the game state from the current slot\n"
-     "for this game, if it exists.\n"
-     "Press left + right to change the current slot.", 3),
+     "Load state from slot", &savestate_slot, MENU_SLOTS,
+     "Loads the slot picked. Left/right pick the slot\n"
+     "(hold them to go faster).", LOAD_SLOT_LINE),
     numeric_selection_action_option(menu_save_state, NULL,
-     "Save state to slot", &savestate_slot, 10,
-     "Select to save the game state to the current slot\n"
-     "for this game. See the extended menu for more info.\n"
-     "Press left + right to change the current slot.", 4),
+     "Save state to slot", &savestate_slot, MENU_SLOTS,
+     "Saves the game here: to a new slot with auto-\n"
+     "increment on (Cheats and Misc), else to the\n"
+     "slot picked.", SAVE_SLOT_LINE),
+#if defined(NSPIRE_LIBRETRO)
+    action_option(menu_save_manager, NULL, "Save manager",
+     "This game's in-game save and states, their sizes:\n"
+     "compress, uncompress or delete them.", 5),
+#endif
 #if !defined(NSPIRE_BUILD)
     submenu_option(&savestate_menu, "Savestate options",
      "Select to enter a menu for loading, saving, and\n"
@@ -2187,15 +2532,16 @@ u32 menu(u16 *original_screen)
      "(or to load a savestate file from another game)", 4),
 #endif
 	submenu_option(&gamepad_config_menu, "Configure input",
-     "Select to change the in-game behavior of buttons\n"
-     "and d-pad.", 6),
+     "Two keys for each GBA button and hotkey, or key\n"
+     "combinations; for all games or this one.", 6),
 #if !defined(GP2X_BUILD) && !defined(NSPIRE_BUILD)
     submenu_option(&analog_config_menu, "Configure analog input",
      "Select to change the in-game behavior of the PSP analog nub.", 7),
 #endif
     submenu_option(&cheats_misc_menu, "Cheats and Miscellaneous options",
-     "Select to manage cheats, set backup behavior,\n"
-     "and set device clock speed.", 8),
+     "Cheats, save state options (auto-increment, save\n"
+     "when leaving, load on start), in-game saves,\n"
+     "compressing saves.", 8),
     submenu_option(&about_menu, "About",
      "View credits and acknowledgements.", 10),
     action_option(menu_load, NULL, "Load new game",
@@ -2211,6 +2557,47 @@ u32 menu(u16 *original_screen)
   };
 
   make_menu(main, submenu_main, NULL);
+
+#if defined(NSPIRE_LIBRETRO)
+  /* The slot lines say what selecting them does: which slot a save goes to
+   * (a new one with auto-increment on) and whether the slot to load from
+   * holds a state. */
+  void refresh_slot_lines()
+  {
+    static char load_line[64], save_line[64];
+    u32 n;
+
+    for(n = 0; n < sizeof(main_options) / sizeof(main_options[0]); n++)
+    {
+      menu_option_type *o = &main_options[n];
+      if(o->line_number == LOAD_SLOT_LINE)
+      {
+        snprintf(load_line, sizeof(load_line), "Load state from slot: %%03d%s",
+         states_exists((int)savestate_slot) ? "" : " (empty)");
+        o->display_string = load_line;
+      }
+      else if(o->line_number == SAVE_SLOT_LINE)
+      {
+        if(nspire_auto_increment)
+        {
+          int target = nspire_save_target();
+          if(target < 0)
+            snprintf(save_line, sizeof(save_line), "Save state: all 1000 slots are used");
+          else
+            snprintf(save_line, sizeof(save_line), "Save state to new slot %03d", target);
+          o->option_type = ACTION_OPTION;
+        }
+        else
+        {
+          snprintf(save_line, sizeof(save_line), "Save state to slot: %%03d%s",
+           states_exists((int)savestate_slot) ? " (replaces it)" : "");
+          o->option_type = NUMBER_SELECTION_OPTION | ACTION_OPTION;
+        }
+        o->display_string = save_line;
+      }
+    }
+  }
+#endif
 
   void choose_menu(menu_type *new_menu)
   {
@@ -2244,6 +2631,32 @@ u32 menu(u16 *original_screen)
     const u32 max_cols = 50;
     u32 line_index = 0;
     const char *p = text ? text : "";
+
+#if defined(NSPIRE_HOST)
+    /* For the PC tests: the screen has room for 3 lines of 50 under the
+     * options, so a help text must fit them. */
+    {
+      const char *q;
+      u32 lines = 1, col = 0, too_wide = 0;
+      for (q = p; *q; q++)
+        if (*q == '\n')
+        {
+          lines++;
+          col = 0;
+        }
+        else if (++col > max_cols)
+          too_wide = 1;
+      if (q > p && q[-1] == '\n')
+        lines--;
+      if (too_wide || lines > 3)
+      {
+        fprintf(stderr, "gpsp-host: help text too long: ");
+        for (q = p; *q; q++)
+          fputc(*q == '\n' ? '|' : *q, stderr);
+        fputc('\n', stderr);
+      }
+    }
+#endif
 
     while (*p && line_index < max_lines)
     {
@@ -2293,7 +2706,15 @@ u32 menu(u16 *original_screen)
       line_index++;
     }
   }
-  
+
+#if defined(NSPIRE_LIBRETRO)
+  /* The menu's options call the functions above through trampolines, code
+   * GCC wrote onto this frame of the stack as data on the way in. The menu
+   * opens from more than one stack depth, so they must reach memory and
+   * the instruction cache can't keep older ones. */
+  nspire_sync_written_code();
+#endif
+
   menu_update_clock();
   video_resolution_large();
 
@@ -2335,13 +2756,53 @@ u32 menu(u16 *original_screen)
 
   while(repeat)
   {
+    u32 scroll = 0;
     display_option = current_menu->options;
 #ifdef NSPIRE_BUILD
 	clear_screen(COLOR_BG);
 #endif
+#if defined(NSPIRE_LIBRETRO)
+    refresh_slot_lines();
+    /* Menus longer than the screen scroll to keep the selected line in view. */
+    {
+      u32 max_line = 0, line_now = current_option->line_number;
+      for(i = 0; i < current_menu->num_options; i++)
+        if(current_menu->options[i].line_number > max_line)
+          max_line = current_menu->options[i].line_number;
+      if(max_line > MENU_LAST_LINE && line_now > MENU_LAST_LINE / 2)
+      {
+        scroll = line_now - MENU_LAST_LINE / 2;
+        if(scroll > max_line - MENU_LAST_LINE)
+          scroll = max_line - MENU_LAST_LINE;
+      }
+    }
+#endif
     current_menu->init_function();
 	for(i = 0; i < current_menu->num_options; i++, display_option++)
     {
+      u32 line = display_option->line_number;
+
+#if defined(NSPIRE_LIBRETRO)
+      if(line < scroll || line - scroll > MENU_LAST_LINE)
+        continue;
+      line -= scroll;
+      if(display_option->option_type & KEY_BINDING_OPTION)
+      {
+        /* "A                  del       [7]": the picked key in brackets,
+         * the second keys lined up. */
+        char first[24], second[24], cell[32];
+        u32 action = display_option->num_options;
+        int picked = display_option == current_option;
+        binding_name(key_bindings[action][0], first, sizeof(first));
+        binding_name(key_bindings[action][1], second, sizeof(second));
+        snprintf(cell, sizeof(cell), "%s%s%s", picked && key_column == 0 ? "[" : " ", first,
+         picked && key_column == 0 ? "]" : " ");
+        snprintf((char *)line_buffer, sizeof(line_buffer), "%-17s %-11s%s%s%s",
+         action_names[action], cell,
+         picked && key_column == 1 ? "[" : " ", second, picked && key_column == 1 ? "]" : " ");
+      }
+      else
+#endif
       if(display_option->option_type & NUMBER_SELECTION_OPTION)
       {
         sprintf(line_buffer, display_option->display_string,
@@ -2352,7 +2813,7 @@ u32 menu(u16 *original_screen)
       if(display_option->option_type & (STRING_SELECTION_OPTION))
       {
         sprintf(line_buffer, display_option->display_string,
-         ((u32 *)display_option->options)[*(display_option->current_option)]);
+         ((char **)display_option->options)[*(display_option->current_option)]);
       }
       else
       {
@@ -2361,16 +2822,28 @@ u32 menu(u16 *original_screen)
 
       if(display_option == current_option)
       {
+#ifdef NSPIRE_BUILD
+        current_option_y = (line * 10) + 40;
+#endif
         print_string_pad(line_buffer, COLOR_ACTIVE_ITEM, COLOR_BG, 10,
-         (display_option->line_number * 10) + 40, 41);
+         (line * 10) + 40, 41);
       }
       else
       {
         print_string_pad(line_buffer, COLOR_INACTIVE_ITEM, COLOR_BG, 10,
-         (display_option->line_number * 10) + 40, 41);
+         (line * 10) + 40, 41);
       }
     }
 
+#ifdef NSPIRE_BUILD
+    /* What the last action did, until the next key. */
+    if(menu_status[0])
+    {
+      clear_help();
+      print_string_pad(menu_status, COLOR_ACTIVE_ITEM, COLOR_BG, 8, 210, 70);
+    }
+    else
+#endif
     print_help_wrapped(current_option->help_string);
 
     flip_screen();
@@ -2379,6 +2852,13 @@ u32 menu(u16 *original_screen)
 #endif
 
     gui_action = get_gui_input();
+#ifdef NSPIRE_BUILD
+    if(gui_action != CURSOR_NONE)
+      menu_status[0] = 0;
+    /* esc goes back, like the menu key. */
+    if(gui_action == CURSOR_BACK)
+      gui_action = CURSOR_EXIT;
+#endif
 
     switch(gui_action)
     {
@@ -2401,30 +2881,30 @@ u32 menu(u16 *original_screen)
         break;
 
       case CURSOR_RIGHT:
-        if(current_option->option_type & (NUMBER_SELECTION_OPTION |
-         STRING_SELECTION_OPTION))
-        {
-          *(current_option->current_option) =
-           (*current_option->current_option + 1) %
-           current_option->num_options;
-
-          if(current_option->passive_function)
-            current_option->passive_function();
-        }
-        break;
-
       case CURSOR_LEFT:
+#ifdef NSPIRE_BUILD
+        if(current_option->option_type & KEY_BINDING_OPTION)
+        {
+          key_column ^= 1;
+          break;
+        }
+#endif
         if(current_option->option_type & (NUMBER_SELECTION_OPTION |
          STRING_SELECTION_OPTION))
         {
-          u32 current_option_val = *(current_option->current_option);
-
-          if(current_option_val)
-            current_option_val--;
+          u32 count = current_option->num_options;
+          u32 step = 1;
+#ifdef NSPIRE_BUILD
+          /* Long lists (the save slots) move 10 at a time while held. */
+          if(count >= 100 && gui_repeat_count() > 20)
+            step = 10;
+#endif
+          if(gui_action == CURSOR_RIGHT)
+            *(current_option->current_option) =
+             (*current_option->current_option + step) % count;
           else
-            current_option_val = current_option->num_options - 1;
-
-          *(current_option->current_option) = current_option_val;
+            *(current_option->current_option) =
+             (*current_option->current_option + count - step % count) % count;
 
           if(current_option->passive_function)
             current_option->passive_function();
@@ -2439,19 +2919,48 @@ u32 menu(u16 *original_screen)
         break;
 
       case CURSOR_SELECT:
+#ifdef NSPIRE_BUILD
+        if(current_option->option_type & KEY_BINDING_OPTION)
+        {
+          key_binding b;
+          print_string_pad("press a key (an arrow cancels)", COLOR_ACTIVE_ITEM,
+           COLOR_BG, 10 + 18 * FONT_WIDTH, current_option_y, 30);
+          flip_screen();
+          b = key_capture();
+          if(b.key)
+            key_bindings[current_option->num_options][key_column] = b;
+          break;
+        }
+#endif
         if(current_option->option_type & ACTION_OPTION)
           current_option->action_function();
 
         if(current_option->option_type & SUBMENU_OPTION)
           choose_menu(current_option->sub_menu);
         break;
+
+#ifdef NSPIRE_BUILD
+      case CURSOR_CLEAR:
+        if(current_option->option_type & KEY_BINDING_OPTION)
+        {
+          key_bindings[current_option->num_options][key_column].key = 0;
+          key_bindings[current_option->num_options][key_column].with = 0;
+        }
+        break;
+#endif
+
+      default:
+        break;
     }
   }
-  
+
   set_gba_resolution(screen_scale);
   video_resolution_small();
   menu_get_clock_speed();
   set_clock_speed();
+#if defined(NSPIRE_LIBRETRO)
+  save_config_file();
+#endif
 #ifndef NSPIRE_BUILD
   SDL_PauseAudio(0);
 #endif

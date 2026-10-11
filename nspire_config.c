@@ -1,0 +1,545 @@
+/* gpSP's settings: the file for all games, gpsp_qol.cfg.tns next to gpSP,
+ * and a game's own settings and keys, "<ROM name>.settings.tns" next to the
+ * ROM. Both have names of their own, so this build and older gpSP builds in
+ * the same folder don't change each other's settings; the first start reads
+ * the older builds' gpsp.cfg.tns.
+ *
+ * gpsp_qol.cfg.tns is gpSP's binary file of 32-bit words. Words 0-36 are as
+ * gpSP has always written them (older, shorter files still load); then:
+ *   37      "QOL3", marking what follows ("QOL2" files lack word 66)
+ *   38-57   the key bindings of actions 0-19 (nspire_keys.h): the first
+ *           binding in the low 16 bits, the second in the high 16 bits,
+ *           each key | held key << 8
+ *   58-61   auto-increment, save on exit, load on start, CPU speed
+ *   62      the FPS counter (0 off, 1 on, 2 detailed)
+ *   63      screen brightness (0 the calculator's own, 1-10)
+ *   64-65   the key bindings of actions 20-21 (brightness up, down)
+ *   66      compress saves (1, the default) or not
+ *   67-71   0 (room for more)
+ *
+ * Files from older builds, and from the first QoL build ("QOL1", without
+ * words 63-65), start with the 320x214 picture: older builds showed it
+ * whatever the scaling setting said, and the first QoL build took their
+ * setting as it was. Its CPU speeds were normal, 432, 456 and 480 MHz.
+ * Files before QOL3 get the slot keys, ) and (, where those keys are free.
+ *
+ * A game's own file is text, "name=value" lines, written only while the
+ * game has its own settings or keys ("Settings for" / "Keys for: this
+ * game"); "version=2" marks the ones written since the QOL1 build, and
+ * "version=3" the ones with the slot keys' defaults. */
+
+#include "common.h"
+#include "gui.h"
+#include "nspire.h"
+#include "nspire_gui_video.h"
+#include "nspire_frontend.h"
+#include "nspire_keys.h"
+#include "nspire_states.h"
+#include "nspire_clock.h"
+#include "nspire_brightness.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define CONFIG_WORDS 72
+#define QOL_MAGIC  0x334C4F51u   /* "QOL3" */
+#define QOL2_MAGIC 0x324C4F51u   /* "QOL2", before word 66 and the slot keys */
+#define QOL1_MAGIC 0x314C4F51u   /* "QOL1", the first QoL build's */
+#define GAME_FILE_VERSION 3
+/* Actions before brightness up/down, in words 38-57. */
+#define FIRST_ACTIONS 20
+/* Top byte of word 26: gpSP's newer frameskip encoding (auto/manual/off). */
+#define FS_V2_MARK 0xFF000000u
+
+u32 nspire_auto_increment = 1;
+u32 nspire_save_on_exit = 1;
+u32 nspire_load_on_start = 1;
+u32 nspire_cpu_speed = 0;
+u32 nspire_compress_saves = 1;
+/* The menu's "Settings for" and "Keys for": 0 all games, 1 this game. */
+u32 nspire_settings_for;
+u32 nspire_keys_for;
+
+extern u32 update_backup_flag;
+extern u32 global_enable_analog;
+extern u32 analog_sensitivity_level;
+
+/* The settings a game can have its own of. */
+static const struct
+{
+  const char *name;
+  u32 *value;
+  u32 count;
+} settings[] =
+{
+  { "screen_scale", &screen_scale, 4 },
+  { "frameskip_type", &current_frameskip_type, 3 },
+  { "frameskip_value", &frameskip_value, 100 },
+  { "frameskip_random", &random_skip, 2 },
+  { "show_fps", &nspire_fps_overlay, 3 },
+  { "frame_mixing", &nspire_frame_mix_choice, 2 },
+  { "gba_blending_off", &nspire_gba_blend_off, 2 },
+  { "renderer", &nspire_video_renderer_choice, 2 },
+  { "no_sprite_limit", &nspire_sprlim_choice, 2 },
+  { "rtc", &nspire_rtc_choice, 3 },
+  { "bios", &nspire_bios_choice, 2 },
+  { "dynarec_smc", &nspire_dynarec_ram_policy, 2 },
+  { "write_saves", &update_backup_flag, 2 },
+  { "auto_increment", &nspire_auto_increment, 2 },
+  { "save_on_exit", &nspire_save_on_exit, 2 },
+  { "load_on_start", &nspire_load_on_start, 2 },
+  { "compress_saves", &nspire_compress_saves, 2 },
+  { "cpu_speed", &nspire_cpu_speed, CPU_SPEEDS },
+};
+
+#define NUM_SETTINGS (int)(sizeof(settings) / sizeof(settings[0]))
+
+static const char *const action_ids[NUM_ACTIONS] =
+{
+  "up", "down", "left", "right", "a", "b", "l", "r", "start", "select",
+  "menu", "fast_forward", "load_state", "save_state", "save_exit",
+  "load_newest", "next_slot", "previous_slot", "show_fps", "restart",
+  "brighter", "dimmer"
+};
+
+/* The first QoL build's CPU speeds (normal, 432, 456, 480 MHz) in today's
+ * list (nspire_clock.h). */
+static u32 cpu_speed_from_qol1(u32 old)
+{
+  static const u32 now[4] = { 0, 3, 5, 7 };
+  return now[old % 4];
+}
+
+/* The values for all games, while a game with its own is open. */
+static u32 global_values[NUM_SETTINGS];
+static key_binding global_keys[NUM_ACTIONS][KEY_SLOTS];
+static int game_open, own_settings, own_keys;
+/* The open game's file, kept from when it opened: by the time it closes,
+ * gamepak_filename may already name the next game. */
+static char game_file[600];
+
+static void capture(u32 *values)
+{
+  int i;
+  for (i = 0; i < NUM_SETTINGS; i++)
+    values[i] = *settings[i].value;
+}
+
+static void apply(const u32 *values)
+{
+  int i;
+  for (i = 0; i < NUM_SETTINGS; i++)
+    *settings[i].value = values[i] % settings[i].count;
+}
+
+#define CONFIG_FILE     "gpsp_qol.cfg.tns"
+#define OLD_CONFIG_FILE "gpsp.cfg.tns"   /* older gpSP builds' */
+
+static void config_path(char *path, const char *name)
+{
+  sprintf(path, "%s/%s", main_path, name);
+}
+
+static void clamp_rom_buffer_size(void)
+{
+  if (nspire_rom_buffer_size_choice < 2)
+    nspire_rom_buffer_size_choice = 2;
+  else if (nspire_rom_buffer_size_choice > 32)
+    nspire_rom_buffer_size_choice = 32;
+}
+
+s32 nspire_config_load(void)
+{
+  char path[600];
+  u32 o[CONFIG_WORDS];
+  long size;
+  u32 words, i;
+  int qol = 0;   /* 0: an older build's file, 1: QOL1, 2: QOL2, 3: this build's */
+  FILE *f;
+
+  config_path(path, CONFIG_FILE);
+  f = fopen(path, "rb");
+  if (!f)
+  {
+    /* The first start: the settings older gpSP builds left. */
+    config_path(path, OLD_CONFIG_FILE);
+    f = fopen(path, "rb");
+  }
+  if (!f)
+    return -1;
+  fseek(f, 0, SEEK_END);
+  size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  /* Sizes gpSP's builds wrote (92 = keys, 96 = +BIOS, 112 = +frameskip,
+   * 124 = +emulator options, 128 = +ROM buffer, 132 = +LCD cache, 136 = +FPS,
+   * 140 = +blending, 144 = +dynarec SMC, 148 = +renderer, 152 = older
+   * renderer), and this one's. */
+  if (!(size == 92 || (size >= 96 && size <= 152 && size % 4 == 0) || size == CONFIG_WORDS * 4))
+  {
+    fclose(f);
+    return -1;
+  }
+  memset(o, 0, sizeof(o));
+  words = (u32)size / 4;
+  if (fread(o, 4, words, f) != words)
+  {
+    fclose(f);
+    return -1;
+  }
+  fclose(f);
+
+  screen_scale = o[0] % 4;
+  screen_filter = o[1] % 2;
+  update_backup_flag = o[4] % 2;
+  global_enable_analog = o[5] % 2;
+  analog_sensitivity_level = o[6] % 8;
+
+  /* gpSP's single key per action, for the first 15. */
+  keys_set_defaults(key_bindings);
+  for (i = 0; i < 15; i++)
+  {
+    key_binding b = binding_unpack(o[7 + i] & 0xFF);
+    key_bindings[i][0] = b;
+  }
+
+  nspire_bios_choice = words >= 24 ? o[23] % 2 : 1;
+  if (words >= 28)
+  {
+    if ((o[26] & FS_V2_MARK) == FS_V2_MARK)
+      current_frameskip_type = o[24] % 3;
+    else
+    {
+      static const u32 old_types[] = { no_frameskip, auto_frameskip, auto_frameskip, manual_frameskip };
+      current_frameskip_type = old_types[o[24] % 4];
+    }
+    frameskip_value = o[25] > 99 ? 99 : o[25];
+    if (frameskip_value < 1 && current_frameskip_type == auto_frameskip)
+      frameskip_value = 4;
+    random_skip = o[27] % 2;
+  }
+  if (words >= 31)
+  {
+    nspire_sprlim_choice = o[28] % 2;
+    nspire_rtc_choice = o[29] % 3;
+    nspire_frame_mix_choice = o[30] % 2;
+  }
+  nspire_rom_buffer_size_choice = words >= 32 ? o[31] : 8;
+  nspire_lcd_cache_clean_full = words >= 33 ? o[32] % 2 : 0;
+  nspire_fps_overlay = words >= 34 ? o[33] % 2 : 0;
+  nspire_gba_blend_off = words >= 35 ? o[34] % 2 : 0;
+  nspire_dynarec_ram_policy = words >= 36 ? o[35] % 2 : 0;
+  nspire_video_renderer_choice = words >= 37 ? o[36] % 2 : 0;
+
+  if (words >= 63 && (o[37] == QOL_MAGIC || o[37] == QOL2_MAGIC || o[37] == QOL1_MAGIC))
+  {
+    qol = o[37] == QOL1_MAGIC || words < 67 ? 1 : o[37] == QOL2_MAGIC ? 2 : 3;
+    for (i = 0; i < FIRST_ACTIONS; i++)
+    {
+      key_bindings[i][0] = binding_unpack(o[38 + i] & 0xFFFF);
+      key_bindings[i][1] = binding_unpack(o[38 + i] >> 16);
+    }
+    nspire_auto_increment = o[58] % 2;
+    nspire_save_on_exit = o[59] % 2;
+    nspire_load_on_start = o[60] % 2;
+    nspire_cpu_speed = qol >= 2 ? o[61] % CPU_SPEEDS : cpu_speed_from_qol1(o[61]);
+    nspire_fps_overlay = o[62] % 3;
+  }
+  nspire_compress_saves = qol == 3 ? o[66] % 2 : 1;
+  if (qol >= 2)
+  {
+    nspire_brightness = o[63] % (BRIGHTNESS_LEVELS + 1);
+    for (i = FIRST_ACTIONS; i < NUM_ACTIONS; i++)
+    {
+      key_bindings[i][0] = binding_unpack(o[64 + i - FIRST_ACTIONS] & 0xFFFF);
+      key_bindings[i][1] = binding_unpack(o[64 + i - FIRST_ACTIONS] >> 16);
+    }
+  }
+  else
+  {
+    /* See the top of this file. */
+    screen_scale = scaled_raw;
+    keys_drop_clashing_defaults(key_bindings, qol ? FIRST_ACTIONS : 15);
+  }
+  if (qol < 3)
+  {
+    keys_add_default_if_free(key_bindings, ACTION_NEXT_SLOT);
+    keys_add_default_if_free(key_bindings, ACTION_PREVIOUS_SLOT);
+  }
+
+  clamp_rom_buffer_size();
+  nspire_emulator_options_apply();
+  return 0;
+}
+
+static int write_global_file(void)
+{
+  char path[600];
+  u32 o[CONFIG_WORDS];
+  u32 i;
+  FILE *f;
+  int ok;
+
+  memset(o, 0, sizeof(o));
+  o[0] = screen_scale;
+  o[1] = screen_filter;
+  o[4] = update_backup_flag;
+  o[5] = global_enable_analog;
+  o[6] = analog_sensitivity_level;
+  for (i = 0; i < 15; i++)
+    o[7 + i] = key_bindings[i][0].with ? 0 : key_bindings[i][0].key;
+  clamp_rom_buffer_size();
+  o[23] = nspire_bios_choice % 2;
+  o[24] = current_frameskip_type % 3;
+  o[25] = frameskip_value;
+  o[26] = FS_V2_MARK;
+  o[27] = random_skip % 2;
+  o[28] = nspire_sprlim_choice % 2;
+  o[29] = nspire_rtc_choice % 3;
+  o[30] = nspire_frame_mix_choice % 2;
+  o[31] = nspire_rom_buffer_size_choice;
+  o[32] = nspire_lcd_cache_clean_full % 2;
+  o[33] = nspire_fps_overlay ? 1 : 0;
+  o[34] = nspire_gba_blend_off % 2;
+  o[35] = nspire_dynarec_ram_policy % 2;
+  o[36] = nspire_video_renderer_choice % 2;
+  o[37] = QOL_MAGIC;
+  for (i = 0; i < NUM_ACTIONS; i++)
+    o[i < FIRST_ACTIONS ? 38 + i : 64 + i - FIRST_ACTIONS] =
+        binding_pack(key_bindings[i][0]) | (binding_pack(key_bindings[i][1]) << 16);
+  o[58] = nspire_auto_increment;
+  o[59] = nspire_save_on_exit;
+  o[60] = nspire_load_on_start;
+  o[61] = nspire_cpu_speed;
+  o[62] = nspire_fps_overlay;
+  o[63] = nspire_brightness;
+  o[66] = nspire_compress_saves % 2;
+
+  config_path(path, CONFIG_FILE);
+  f = fopen(path, "wb");
+  if (!f)
+    return -1;
+  ok = fwrite(o, 4, CONFIG_WORDS, f) == CONFIG_WORDS;
+  if (fclose(f) != 0)
+    ok = 0;
+  return ok ? 0 : -1;
+}
+
+/* ---- A game's own settings and keys ---- */
+
+static void game_file_path(const char *rom_path, char *path, size_t size)
+{
+  char base[512];
+  nspire_game_base(rom_path, base, sizeof(base));
+  snprintf(path, size, "%s.settings.tns", base);
+}
+
+static void write_game_file(void)
+{
+  FILE *f;
+  int i, slot;
+
+  if (!game_open)
+    return;
+  if (!own_settings && !own_keys)
+  {
+    remove(game_file);
+    return;
+  }
+  f = fopen(game_file, "w");
+  if (!f)
+    return;
+  fprintf(f, "version=%d\n", GAME_FILE_VERSION);
+  if (own_settings)
+  {
+    fprintf(f, "own_settings=1\n");
+    for (i = 0; i < NUM_SETTINGS; i++)
+      fprintf(f, "%s=%u\n", settings[i].name, (unsigned)*settings[i].value);
+  }
+  if (own_keys)
+  {
+    fprintf(f, "own_keys=1\n");
+    for (i = 0; i < NUM_ACTIONS; i++)
+      for (slot = 0; slot < KEY_SLOTS; slot++)
+        fprintf(f, "key_%s%s=%u\n", action_ids[i], slot ? "_2" : "",
+                binding_pack(key_bindings[i][slot]));
+  }
+  fclose(f);
+}
+
+void nspire_config_open_game(const char *rom_path)
+{
+  char line[200];
+  u32 values[NUM_SETTINGS];
+  unsigned char in_file[NUM_SETTINGS];
+  key_binding keys[NUM_ACTIONS][KEY_SLOTS];
+  int has_settings = 0, has_keys = 0, version = 1, i;
+  FILE *f;
+
+  nspire_config_close_game();
+  capture(global_values);
+  memcpy(global_keys, key_bindings, sizeof(global_keys));
+  memcpy(values, global_values, sizeof(values));
+  memcpy(keys, key_bindings, sizeof(keys));
+  memset(in_file, 0, sizeof(in_file));
+  game_open = 1;
+  own_settings = own_keys = 0;
+
+  game_file_path(rom_path, game_file, sizeof(game_file));
+  f = fopen(game_file, "r");
+  if (f)
+  {
+    while (fgets(line, sizeof(line), f))
+    {
+      char *value = strchr(line, '=');
+      unsigned long number;
+      if (!value)
+        continue;
+      *value++ = 0;
+      number = strtoul(value, NULL, 10);
+      if (!strcmp(line, "version"))
+        version = (int)number;
+      else if (!strcmp(line, "own_settings"))
+        has_settings = number != 0;
+      else if (!strcmp(line, "own_keys"))
+        has_keys = number != 0;
+      else if (!strncmp(line, "key_", 4))
+      {
+        size_t len = strlen(line + 4);
+        int second = len > 2 && !strcmp(line + 4 + len - 2, "_2");
+        for (i = 0; i < NUM_ACTIONS; i++)
+          if (strlen(action_ids[i]) == len - (second ? 2 : 0) &&
+              !strncmp(line + 4, action_ids[i], strlen(action_ids[i])))
+            keys[i][second] = binding_unpack((unsigned)number);
+      }
+      else
+        for (i = 0; i < NUM_SETTINGS; i++)
+          if (!strcmp(line, settings[i].name))
+          {
+            values[i] = (u32)number % settings[i].count;
+            in_file[i] = 1;
+          }
+    }
+    fclose(f);
+  }
+
+  if (has_settings && version < GAME_FILE_VERSION)
+  {
+    /* Written by the first QoL build: see the top of this file. */
+    for (i = 0; i < NUM_SETTINGS; i++)
+      if (settings[i].value == &screen_scale)
+        values[i] = scaled_raw;
+      else if (settings[i].value == &nspire_cpu_speed && in_file[i])
+        values[i] = cpu_speed_from_qol1(values[i]);
+  }
+  if (has_settings)
+  {
+    own_settings = 1;
+    apply(values);
+  }
+  if (has_keys)
+  {
+    own_keys = 1;
+    if (version < 3)
+    {
+      keys_add_default_if_free(keys, ACTION_NEXT_SLOT);
+      keys_add_default_if_free(keys, ACTION_PREVIOUS_SLOT);
+    }
+    memcpy(key_bindings, keys, sizeof(keys));
+  }
+  /* A raised CPU speed froze this game last time (nspire_clock.c). */
+  if (nspire_clock_crashed_rom[0] && !strcmp(nspire_clock_crashed_rom, rom_path))
+  {
+    nspire_cpu_speed = 0;
+    nspire_clock_crashed_rom[0] = 0;
+    write_game_file();
+  }
+  nspire_settings_for = (u32)own_settings;
+  nspire_keys_for = (u32)own_keys;
+  clamp_rom_buffer_size();
+  nspire_emulator_options_apply();
+}
+
+void nspire_config_close_game(void)
+{
+  if (!game_open)
+    return;
+  write_game_file();
+  if (own_settings)
+    apply(global_values);
+  else
+    capture(global_values);
+  if (own_keys)
+    memcpy(key_bindings, global_keys, sizeof(global_keys));
+  else
+    memcpy(global_keys, key_bindings, sizeof(global_keys));
+  game_open = own_settings = own_keys = 0;
+  nspire_settings_for = nspire_keys_for = 0;
+  nspire_emulator_options_apply();
+}
+
+/* The menu changed "Settings for": this game's own starts from the values in
+ * use, and going back to all games drops them. */
+void nspire_config_settings_for_changed(void)
+{
+  if (!game_open)
+  {
+    nspire_settings_for = 0;
+    return;
+  }
+  if (nspire_settings_for && !own_settings)
+  {
+    capture(global_values);
+    own_settings = 1;
+  }
+  else if (!nspire_settings_for && own_settings)
+  {
+    own_settings = 0;
+    apply(global_values);
+    nspire_emulator_options_apply();
+  }
+}
+
+void nspire_config_keys_for_changed(void)
+{
+  if (!game_open)
+  {
+    nspire_keys_for = 0;
+    return;
+  }
+  if (nspire_keys_for && !own_keys)
+  {
+    memcpy(global_keys, key_bindings, sizeof(global_keys));
+    own_keys = 1;
+  }
+  else if (!nspire_keys_for && own_keys)
+  {
+    own_keys = 0;
+    memcpy(key_bindings, global_keys, sizeof(global_keys));
+  }
+}
+
+/* Writes the settings for all games, and the open game's own. */
+s32 nspire_config_save(void)
+{
+  u32 live[NUM_SETTINGS];
+  key_binding live_keys[NUM_ACTIONS][KEY_SLOTS];
+  s32 result;
+
+  /* What isn't the game's own belongs to all games. */
+  if (!(game_open && own_settings))
+    capture(global_values);
+  if (!(game_open && own_keys))
+    memcpy(global_keys, key_bindings, sizeof(global_keys));
+
+  capture(live);
+  memcpy(live_keys, key_bindings, sizeof(live_keys));
+  apply(global_values);
+  memcpy(key_bindings, global_keys, sizeof(global_keys));
+  result = write_global_file();
+  apply(live);
+  memcpy(key_bindings, live_keys, sizeof(live_keys));
+
+  write_game_file();
+  return result;
+}

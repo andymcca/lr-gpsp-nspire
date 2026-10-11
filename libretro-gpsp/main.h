@@ -97,7 +97,9 @@ void game_name_ext(char *src, char *buffer, char *extension);
 
 #ifdef NSPIRE_LIBRETRO
 extern u32 clock_speed;
-extern frameskip_type current_frameskip_type;
+/* A frameskip_type value; 32 bits because the menu edits it through a u32
+ * pointer (enums are one byte with the Nspire toolchain). */
+extern u32 current_frameskip_type;
 extern u32 frameskip_value;
 extern u32 random_skip;
 /* 0 = built-in open BIOS, 1 = gba_bios.bin.tns next to executable */

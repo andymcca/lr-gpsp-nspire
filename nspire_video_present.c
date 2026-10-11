@@ -1,95 +1,177 @@
-/* Blit libretro video.cc framebuffer (240-pitch RGB565) to the Nspire back buffer.
- * nspire/upscale_aspect.S assumes src stride 320 (legacy video.c); repack rows first. */
+/* Game frames to the LCD, with the FPS counter and messages over them.
+ *
+ * The core draws 240x160 RGB565 frames (gba_screen_pixels, 240 pixels a
+ * line). On the CX II's portrait LCD they're scaled and turned straight into
+ * the next screen buffer, in one pass: nspire_turn.c for the sharp ones,
+ * nspire_blend.c for the blended ones (with interframe blending on the way).
+ * On landscape LCDs notaz's scalers (nspire/upscale_aspect.s, gpSP's 5:5:5
+ * menu format) write the screen buffer directly, as before. */
 
 #include "common.h"
 #include "video.h"
 #include "nspire.h"
 #include "nspire_gui_video.h"
-#include "font.h"
+#include "nspire_frontend.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
-#if defined(NSPIRE_LIBRETRO)
-static u64 nspire_fps_t0;
-static u32 nspire_fps_accum;
-static u32 nspire_fps_shown;
-
-void nspire_fps_overlay_reset(void)
-{
-  nspire_fps_t0 = 0;
-  nspire_fps_accum = 0;
-  nspire_fps_shown = 0;
-}
-
-/* Visible FPS at full speed: ~59.73/(N+1) for manual (uniform or random, same long-run
- * average). Auto targets full refresh when the core keeps up with the LCD. */
-static u32 nspire_fps_expected_visible(void)
-{
-  u32 n;
-
-  if (!synchronize_flag)
-  {
-    if (current_frameskip_type == manual_frameskip)
-    {
-      /* nspire_frameskip_begin_frame forces used_frameskip = 4 → period (N+1) = 5. */
-      n = 4u;
-      return (5973u + 50u * (n + 1u)) / (100u * (n + 1u));
-    }
-    if (current_frameskip_type == auto_frameskip)
-      return (5973u + 50u * 5u) / (100u * 5u);
-    return 60u;
-  }
-
-  switch (current_frameskip_type)
-  {
-  case no_frameskip:
-    return 60u;
-  case manual_frameskip:
-    n = frameskip_value;
-    if (n > 99u)
-      n = 99u;
-    return (5973u + 50u * (n + 1u)) / (100u * (n + 1u));
-  case auto_frameskip:
-  default:
-    return 60u;
-  }
-}
-
-static void nspire_fps_overlay_update_and_draw(void)
-{
-  u64 now;
-  char buf[40];
-  u32 expected;
-
-  if (!nspire_fps_overlay)
-    return;
-
-  get_ticks_us(&now);
-  nspire_fps_accum++;
-  if (nspire_fps_t0 == 0)
-    nspire_fps_t0 = now;
-  else
-  {
-    u64 dt = now - nspire_fps_t0;
-    if (dt >= 500000u)
-    {
-      if (dt > 0u)
-        nspire_fps_shown =
-            (u32)(((unsigned long long)nspire_fps_accum * 1000000ull) / (unsigned long long)dt);
-      nspire_fps_t0 = now;
-      nspire_fps_accum = 0u;
-    }
-  }
-
-  expected = nspire_fps_expected_visible();
-  snprintf(buf, sizeof(buf), "FPS:%u/%u", (unsigned)nspire_fps_shown, (unsigned)expected);
-  print_string_ext(buf, 0xFFFFu, 0x0000u, 2u, 2u, nspire_screen, 320u, 0u, 0u, FONT_HEIGHT);
-}
-#endif /* NSPIRE_LIBRETRO */
-
 extern u32 resolution_width;
 extern u32 resolution_height;
+
+/* ---- Text over the picture ---- */
+
+static char message[64];
+static u32 message_until;
+static int message_on;
+
+char nspire_fps_text[64];
+u16 nspire_fps_color;
+char nspire_perf_text[80];
+
+void nspire_osd_message(const char *format, ...)
+{
+  va_list ap;
+  va_start(ap, format);
+  vsnprintf(message, sizeof(message), format, ap);
+  va_end(ap);
+  message_until = nspire_ticks() + NSPIRE_TICK_HZ * 2;
+  message_on = 1;
+}
+
+void nspire_osd_clear(void)
+{
+  message_on = 0;
+  nspire_fps_text[0] = 0;
+  nspire_perf_text[0] = 0;
+}
+
+static const char *visible_message(void)
+{
+  if (message_on && (s32)(nspire_ticks() - message_until) >= 0)
+    message_on = 0;
+  return message_on ? message : NULL;
+}
+
+/* Colors in the LCD's 5:6:5 (portrait) and gpSP's 5:5:5 BGR (landscape). */
+#define RGB565(r, g, b) ((u16)(((r) << 11) | ((g) << 5) | (b)))
+#define BGR555(r, g, b) ((u16)(((b) << 10) | ((g) << 5) | (r)))
+
+u16 nspire_osd_color(int which)
+{
+  static const u16 portrait[] = { RGB565(31, 63, 31), RGB565(4, 58, 4), RGB565(31, 44, 0), RGB565(31, 8, 4) };
+  static const u16 landscape[] = { BGR555(31, 31, 31), BGR555(2, 29, 2), BGR555(31, 22, 0), BGR555(31, 4, 2) };
+  return nspire_lcd_portrait ? portrait[which] : landscape[which];
+}
+
+/* A 320x12 band of the landscape picture: black, with text in it. */
+#define BAND_H 12
+static u16 band[320 * BAND_H] __attribute__((aligned(4)));
+
+static void band_text(const char *left, u16 left_color, const char *centered, u16 centered_color)
+{
+  memset(band, 0, sizeof(band));
+  if (left)
+    nspire_draw_text(band, 320, 2, 1, left, left_color, 0, 320);
+  if (centered)
+  {
+    u32 w = (u32)strlen(centered) * OSD_FONT_W;
+    u32 x = w < 316 ? (320 - w) / 2 : 2;
+    nspire_draw_text(band, 320, x, 1, centered, centered_color, 0, 318);
+  }
+}
+
+/* A text box on a black plate, for pictures that fill the screen. */
+static void portrait_box(u16 *dst, u32 x, u32 y, const char *text, u16 color)
+{
+  u32 w = (u32)strlen(text) * OSD_FONT_W + 4;
+  if (w > 320 - x)
+    w = 320 - x;
+  memset(band, 0, sizeof(band));
+  nspire_draw_text(band, 320, 2, 1, text, color, 0, w);
+  nspire_turn_rect_565(dst, band, 320, x, y, w, BAND_H);
+}
+
+/* What each screen buffer's bands hold, so that a band is only drawn again
+ * when its text changes (the pictures outside fullscreen never cover them). */
+#define SCREENS 3
+static struct
+{
+  int valid;
+  char top[sizeof(nspire_perf_text)];
+  u16 top_color;
+  char bottom[sizeof(message)];
+} bands_shown[SCREENS];
+
+void nspire_present_forget_bands(void)
+{
+  int i;
+  for (i = 0; i < SCREENS; i++)
+    bands_shown[i].valid = 0;
+}
+
+/* The counters go in the top band and messages in the bottom one, which are
+ * outside the picture except in fullscreen mode. A band is drawn whenever
+ * its text differs from what that buffer has, so text that goes away
+ * doesn't linger in the buffers. */
+static void draw_text_portrait(u16 *dst)
+{
+  const char *msg = visible_message();
+  const char *top = nspire_perf_text[0] ? nspire_perf_text : nspire_fps_text[0] ? nspire_fps_text : NULL;
+  u16 top_color = nspire_perf_text[0] ? nspire_osd_color(OSD_WHITE) : nspire_fps_color;
+  int screen = nspire_screen_index() % SCREENS;
+
+  if (screen_scale == fullscreen)
+  {
+    bands_shown[screen].valid = 0;
+    if (top)
+      portrait_box(dst, 0, 0, top, top_color);
+    if (msg)
+    {
+      u32 w = (u32)strlen(msg) * OSD_FONT_W + 4;
+      portrait_box(dst, w < 320 ? (320 - w) / 2 : 0, 240 - BAND_H, msg, nspire_osd_color(OSD_WHITE));
+    }
+    return;
+  }
+  if (!top)
+    top = "";
+  if (!msg)
+    msg = "";
+  if (!bands_shown[screen].valid || strcmp(bands_shown[screen].top, top) ||
+      bands_shown[screen].top_color != top_color)
+  {
+    band_text(top, top_color, NULL, 0);
+    nspire_turn_rect_565(dst, band, 320, 0, 0, 320, BAND_H);
+    snprintf(bands_shown[screen].top, sizeof(bands_shown[screen].top), "%s", top);
+    bands_shown[screen].top_color = top_color;
+  }
+  if (!bands_shown[screen].valid || strcmp(bands_shown[screen].bottom, msg))
+  {
+    band_text(NULL, 0, msg, nspire_osd_color(OSD_WHITE));
+    nspire_turn_rect_565(dst, band, 320, 0, 240 - BAND_H, 320, BAND_H);
+    snprintf(bands_shown[screen].bottom, sizeof(bands_shown[screen].bottom), "%s", msg);
+  }
+  bands_shown[screen].valid = 1;
+}
+
+static void draw_text_landscape(u16 *dst)
+{
+  const char *msg = visible_message();
+  const char *top = nspire_perf_text[0] ? nspire_perf_text : nspire_fps_text[0] ? nspire_fps_text : NULL;
+
+  if (top)
+    nspire_draw_text(dst, 320, 2, 1, top,
+                     nspire_perf_text[0] ? nspire_osd_color(OSD_WHITE) : nspire_fps_color, 0, 318);
+  if (msg)
+  {
+    u32 w = (u32)strlen(msg) * OSD_FONT_W;
+    nspire_draw_text(dst, 320, w < 316 ? (320 - w) / 2 : 2, 240 - BAND_H + 1, msg,
+                     nspire_osd_color(OSD_WHITE), 0, 318);
+  }
+}
+
+/* ---- Frames ---- */
 
 #define NSPIRE_UPSCALE_SRC_PITCH 320
 
@@ -100,13 +182,13 @@ static u16 nspire_upscale_src[NSPIRE_UPSCALE_SRC_PITCH * GBA_SCREEN_HEIGHT];
 #define NSPIRE_LCD565_FROM_CORE(p) \
   ((u16)(((p) & 0x1Fu) << 10) | ((((p) & 0x07C0u) >> 1) & 0x03E0u) | (((p) >> 11) & 0x1Fu))
 
-static void repack_gba_to_upscale_src(void)
+static void repack_gba_to_upscale_src(const u16 *frame, u32 pitch)
 {
   u32 y, x;
   for (y = 0; y < GBA_SCREEN_HEIGHT; y++)
   {
     u16 *__restrict dst = nspire_upscale_src + y * NSPIRE_UPSCALE_SRC_PITCH;
-    const u16 *__restrict src = gba_screen_pixels + y * GBA_SCREEN_PITCH;
+    const u16 *__restrict src = frame + y * pitch;
     for (x = 0; x < GBA_SCREEN_WIDTH; x += 8)
     {
       dst[x + 0] = NSPIRE_LCD565_FROM_CORE(src[x + 0]);
@@ -123,97 +205,99 @@ static void repack_gba_to_upscale_src(void)
 
 #define NSPIRE_MIX_PIXELS (GBA_SCREEN_PITCH * GBA_SCREEN_HEIGHT)
 
-static u16 mix_prev[NSPIRE_MIX_PIXELS];
+static u16 mix_prev[NSPIRE_MIX_PIXELS] __attribute__((aligned(32)));
+static u16 mix_out[GBA_SCREEN_WIDTH * GBA_SCREEN_HEIGHT] __attribute__((aligned(4)));
 
 void nspire_video_mix_reset(void)
 {
   memset(mix_prev, 0xFF, sizeof(mix_prev));
 }
 
-/* Same 50:50 packed RGB565 mix as libretro video_post_process_mix(). */
-static void repack_gba_mix_to_upscale_src(void)
+/* Interframe blending: the same 50:50 packed RGB565 mix as libretro's
+ * video_post_process_mix(), into mix_out (240 pixels a line). */
+static void mix_frames(void)
 {
   u32 y, x;
   for (y = 0; y < GBA_SCREEN_HEIGHT; y++)
   {
-    u16 *__restrict dst = nspire_upscale_src + y * NSPIRE_UPSCALE_SRC_PITCH;
-    u16 *__restrict prev_row = mix_prev + y * GBA_SCREEN_PITCH;
     const u16 *__restrict src = gba_screen_pixels + y * GBA_SCREEN_PITCH;
-    for (x = 0; x < GBA_SCREEN_WIDTH; x += 8)
+    u16 *__restrict prev_row = mix_prev + y * GBA_SCREEN_PITCH;
+    u16 *__restrict dst = mix_out + y * GBA_SCREEN_WIDTH;
+    for (x = 0; x < GBA_SCREEN_WIDTH; x++)
     {
-      u16 c0 = src[x + 0], p0 = prev_row[x + 0];
-      u16 c1 = src[x + 1], p1 = prev_row[x + 1];
-      u16 c2 = src[x + 2], p2 = prev_row[x + 2];
-      u16 c3 = src[x + 3], p3 = prev_row[x + 3];
-      u16 c4 = src[x + 4], p4 = prev_row[x + 4];
-      u16 c5 = src[x + 5], p5 = prev_row[x + 5];
-      u16 c6 = src[x + 6], p6 = prev_row[x + 6];
-      u16 c7 = src[x + 7], p7 = prev_row[x + 7];
-      prev_row[x + 0] = c0;
-      prev_row[x + 1] = c1;
-      prev_row[x + 2] = c2;
-      prev_row[x + 3] = c3;
-      prev_row[x + 4] = c4;
-      prev_row[x + 5] = c5;
-      prev_row[x + 6] = c6;
-      prev_row[x + 7] = c7;
-      dst[x + 0] = NSPIRE_LCD565_FROM_CORE((u16)((c0 + p0 + ((c0 ^ p0) & 0x821u)) >> 1));
-      dst[x + 1] = NSPIRE_LCD565_FROM_CORE((u16)((c1 + p1 + ((c1 ^ p1) & 0x821u)) >> 1));
-      dst[x + 2] = NSPIRE_LCD565_FROM_CORE((u16)((c2 + p2 + ((c2 ^ p2) & 0x821u)) >> 1));
-      dst[x + 3] = NSPIRE_LCD565_FROM_CORE((u16)((c3 + p3 + ((c3 ^ p3) & 0x821u)) >> 1));
-      dst[x + 4] = NSPIRE_LCD565_FROM_CORE((u16)((c4 + p4 + ((c4 ^ p4) & 0x821u)) >> 1));
-      dst[x + 5] = NSPIRE_LCD565_FROM_CORE((u16)((c5 + p5 + ((c5 ^ p5) & 0x821u)) >> 1));
-      dst[x + 6] = NSPIRE_LCD565_FROM_CORE((u16)((c6 + p6 + ((c6 ^ p6) & 0x821u)) >> 1));
-      dst[x + 7] = NSPIRE_LCD565_FROM_CORE((u16)((c7 + p7 + ((c7 ^ p7) & 0x821u)) >> 1));
+      u16 c = src[x], p = prev_row[x];
+      prev_row[x] = c;
+      dst[x] = (u16)((c + p + ((c ^ p) & 0x821u)) >> 1);
     }
   }
 }
 
-void nspire_present_frame(u32 skip_next_frame)
+static void present_portrait(const u16 *frame, u32 pitch)
 {
-  if (skip_next_frame)
-  {
-    update_at_vblank();
-#if defined(NSPIRE_LIBRETRO)
-    relative_frame_count++;
-#endif
-    return;
-  }
+  u16 *dst = (u16 *)nspire_screen;
+  u16 *prev = nspire_frame_mix_choice ? mix_prev : NULL;
 
-  if ((resolution_width == 240) && (resolution_height == 160) && gba_screen_pixels)
+  switch (screen_scale)
   {
-    if (nspire_frame_mix_choice)
-    {
-      repack_gba_mix_to_upscale_src();
-      if (screen_scale == fullscreen)
-        upscale_aspect_fast(nspire_screen, nspire_upscale_src);
-      else if (screen_scale == scaled_raw)
-        upscale_aspect_raw(nspire_screen, nspire_upscale_src);
-      else
-        upscale_aspect(nspire_screen, nspire_upscale_src);
-    }
+  case unscaled:
+    nspire_turn_1x(dst, frame, pitch);
+    break;
+  case scaled_aspect:
+    nspire_blend_turn_aspect(dst, gba_screen_pixels, prev);
+    break;
+  case fullscreen:
+    nspire_blend_turn_full(dst, gba_screen_pixels, prev);
+    break;
+  case scaled_raw:
+  default:
+    nspire_turn_raw(dst, frame, pitch);
+    break;
+  }
+  draw_text_portrait(dst);
+}
+
+/* The blended pictures on a portrait LCD do interframe blending themselves. */
+static int blends_frames_itself(void)
+{
+  return nspire_lcd_portrait && (screen_scale == scaled_aspect || screen_scale == fullscreen);
+}
+
+static void present_landscape(const u16 *frame, u32 pitch)
+{
+  u16 *dst = (u16 *)nspire_screen;
+
+  if (frame == gba_screen_pixels && screen_scale == scaled_raw)
+    upscale_aspect_raw_from_gba(dst, frame);
+  else
+  {
+    repack_gba_to_upscale_src(frame, pitch);
+    if (screen_scale == fullscreen)
+      upscale_aspect_fast(dst, nspire_upscale_src);
+    else if (screen_scale == scaled_raw)
+      upscale_aspect_raw(dst, nspire_upscale_src);
     else
-    {
-      /* Option-A experiment: avoid full-frame repack on non-mix gameplay.
-       * This routes all scale modes through the direct one-pass path so we can
-       * measure the repack overhead impact on device. */
-      upscale_aspect_raw_from_gba(nspire_screen, gba_screen_pixels);
-    }
-#if defined(NSPIRE_LIBRETRO)
-    nspire_fps_overlay_update_and_draw();
-#endif
+      upscale_aspect(dst, nspire_upscale_src);
   }
+  draw_text_landscape(dst);
+}
 
-  nspire_lcd_fb_cache_clean_for_display();
+/* Shows the frame the core just drew. */
+void nspire_present_frame(void)
+{
+  const u16 *frame = gba_screen_pixels;
+  u32 pitch = GBA_SCREEN_PITCH;
+
+  if (resolution_width != 240 || resolution_height != 160 || !gba_screen_pixels)
+    return;
+  if (nspire_frame_mix_choice && !blends_frames_itself())
   {
-    void *temp = nspire_displayed_screen;
-    nspire_displayed_screen = nspire_screen;
-    nspire_screen = nspire_screen_2;
-    nspire_screen_2 = nspire_screen_3;
-    nspire_screen_3 = temp;
+    mix_frames();
+    frame = mix_out;
+    pitch = GBA_SCREEN_WIDTH;
   }
-  update_at_vblank();
-#if defined(NSPIRE_LIBRETRO)
-  relative_frame_count++;
-#endif
+  if (nspire_lcd_portrait)
+    present_portrait(frame, pitch);
+  else
+    present_landscape(frame, pitch);
+  nspire_flip();
 }
