@@ -60,6 +60,17 @@ Other programs' files stay.
 
 The menus are gpSP's own; the new settings are extra lines in them.
 
+**No more crashes at scene changes.** Since v0.4 games could reset or freeze
+the calculator at Pokemon battle wipes, door transitions and some cutscenes
+(issues [#3](https://github.com/andymcca/lr-gpsp-nspire/issues/3),
+[#4](https://github.com/andymcca/lr-gpsp-nspire/issues/4),
+[#5](https://github.com/andymcca/lr-gpsp-nspire/issues/5)). There were two
+causes, both fixed: the *libretro video.cc* renderer's fast fill crashed when
+a transition's window edge fell on an odd pixel, and *Partial SMC* (Emulator
+options, *Dynarec RAM / SMC*) ran code that games keep in RAM wrongly, so
+Pokemon Emerald froze right after loading a state. Both renderers, both
+*Dynarec RAM / SMC* settings and every ROM buffer size work now.
+
 **Screen.** On the CX II the picture is turned for the portrait LCD in software
 and shown from one of three buffers, which the LCD switches between only
 between refreshes: no diagonal tearing (that came from Ndless's compatibility
@@ -246,7 +257,8 @@ in `~/nspire/build/testroms/gba/gba-tests`):
 
 `tests/calc_checks.py` (needs the Ndless toolchain) checks the calculator
 build's disassembly for what a PC can't show: that `menu()` syncs the caches
-before its first trampoline call.
+before its first trampoline call, and that video.cc's fill stores an odd
+first pixel alone before its 16-byte stores.
 
 `tests/arm/run.sh` (needs the Ndless toolchain and qemu-arm) builds code for
 the calculator's CPU and runs it under qemu-arm: the one-pass blended
@@ -254,7 +266,13 @@ pictures against the old path (notaz's ARM scalers, the 5:5:5 copy and
 turning) on noise, gradients and extreme colors, with and without
 interframe blending: same red and blue, green within 3 of 63, every pixel as
 a plain per-pixel version of the math says, and nothing written outside the
-picture.
+picture. Also video.cc's backdrop fill at every start pixel and length (it
+crashed on odd ones), and the core with its dynarec on a small test ROM
+whose code in RAM calls, loops and is rewritten by DMA and by the CPU, with
+both *Dynarec RAM / SMC* settings. With the game, its BIOS and a save state
+in `$GBA_GAMES` (see `tests/arm/run.sh`), Pokemon Emerald is played from the
+state into a wild battle with both renderers, both SMC settings, 8 and 32 MB
+ROM buffers and as a zip: all must reach the same battle frame for frame.
 
 ## Releases
 

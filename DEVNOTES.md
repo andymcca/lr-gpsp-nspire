@@ -33,13 +33,23 @@ Build, test, deploy
     . ~/nspire/build/env.sh
     make -j                      # gpsp_libretro.tns
     tests/host/run.sh            # core_tests, frontend_tests, host_tests.py
-    tests/arm/run.sh             # ARM code under qemu-arm (the blended pictures)
+    tests/arm/run.sh             # ARM code under qemu-arm: blended pictures, the
+                                 # scanline fill, the dynarec, an Emerald replay
     python3 -I tests/calc_checks.py   # the calculator build's disassembly
 
 Every build that goes on the calculator passes all of these first, and the
 simulator's screenshots of anything changed on screen get looked at
 (`tests/host/build/host_tests/NAME/out/*.ppm`). `python3 -I
 tests/host/host_tests.py NAME` runs one scenario.
+
+`tests/arm` also runs gpSP's core as the calculator does (the ARM dynarec,
+both renderers, the ROM page cache; built with the calculator's flags) on a
+test ROM (`rom/ram_code.S`) and on a real game: `replay.c` plays a save
+state with scripted keys and prints a hash of every 50th frame. The Emerald
+replay needs the game, its BIOS and the owner's state in `$GBA_GAMES`
+(default `~/nspire/build/testroms/gba/games`, see `tests/arm/run.sh`); it's
+skipped without them. `build/replay ROM BIOS STATE MB POLICY RENDERER FRAMES
+KEYS DIR` also writes those frames as pictures (`DIR/f*.ppm`) to look at.
 
 To the calculator: `nspire-link put -f gpsp_libretro.tns /gba/_gpSP.tns`,
 then `get` it back and compare checksums. The calculator only answers over
@@ -72,6 +82,9 @@ Where things are
 | `nspire_brightness.c`, `nspire_clock.c` | backlight, CPU speed |
 | `gui.c` | gpSP's own menus and file list (kept; new settings are lines in them) |
 | `libretro-gpsp/gba_memory.c` | the core's ROM loading: zip and progress hooks are here |
+| `libretro-gpsp/cpu_threaded.c` | the dynarec: translating blocks, linking their branches, Partial/Classic SMC |
+| `nspire/scanline_fill16.S` | video.cc's backdrop fill in ARM assembly |
+| `tests/arm/` | ARM code under qemu-arm: the blend and fill tests, the core on a test ROM (`dynarec_test.c`) and on real games (`replay.c`) |
 
 
 Decisions and why
@@ -165,6 +178,51 @@ Decisions and why
   theirs. The build's own file stays `gpsp_libretro.tns`, upstream's name.
 
 
+The scene-change crash (upstream issues #3, #4, #5)
+---------------------------------------------------
+
+Since upstream's v0.4 games crashed or froze the calculator at scene
+changes: Pokemon battle wipes, entering a house in Minish Cap, a Megaman
+Zero cutscene (issue #3 is the owner's; v0.3 was fine; upstream's v0.4.1
+removed RAM block reuse for it, but it went on crashing). The owner found it
+stopped with the legacy renderer, Classic SMC and a 32 MB ROM buffer. Two
+separate bugs, both reproduced with the core under qemu-arm on the owner's
+own Emerald state (`tests/arm/replay.c`), both fixed 2026-10-11:
+
+* **video.cc's backdrop fill** (`nspire/scanline_fill16.S`, added in v0.4 as
+  an ARM9 speed-up; the v0.3 release binary doesn't have it) stored 16 bytes
+  at a time with `stmia` from wherever it started. Wipes and transitions draw
+  windows whose edges move every line, and an edge on an odd pixel started
+  the fill 2 bytes off a word. The calculator checks alignment (gpSP turns
+  the check back on at quit, `nspire_restore`), so the store aborted and the
+  calculator reset or froze. The legacy renderer has its own fill. Fix: an
+  odd start is stored alone first. `tests/arm/fill_test.c` tries every start
+  and length (qemu stops at an unaligned `stmia` the same way), and
+  `calc_checks.py` checks the build has the aligned version.
+* **Partial SMC left branches between blocks of RAM code unlinked.** The
+  emitter writes a placeholder (`B +0`) for every direct branch, and
+  `translate_block` patches it once the target is translated; Partial
+  patches only BIOS and ROM targets, as a direct link into RAM code could
+  run stale code after a partial flush. The placeholder ran the next host
+  instructions instead, so calls and loops in IWRAM code were skipped:
+  Emerald froze right after loading a state and crashed within 100 frames of
+  starting. Upstream's `docs/partial-flush-smc-fix.md` describes an emitter
+  change for this that was never committed. Fix: those exits jump to a PC
+  lookup (as BX does) placed after the block, so whatever translation the
+  target has now runs. `tests/arm/dynarec_test.c` runs `rom/ram_code.S` (ARM
+  and Thumb code in IWRAM and EWRAM that calls, loops back to before its
+  block and jumps back, then is rewritten by DMA and by a CPU store) with
+  both settings; before the fix Partial got 0 for every sum.
+* The ROM buffer had nothing to do with it: with 8 MB the replay reads 29
+  ROM pages during the walk and the battle, and zips are unpacked whole
+  anyway. Nor did libretro gpSP's fix for host stack overflows during
+  translation (70707ce): the replay peaks at 7 KB of Ndless's 128 KB stack.
+
+With both fixed, all 12 settings the replay tries (both renderers, both SMC
+settings, 8 and 32 MB, the .gba and the zip) reach the same battle frame for
+frame; on the unfixed code only legacy + Classic got there.
+
+
 Gotchas
 -------
 
@@ -189,7 +247,21 @@ Gotchas
   within the first second (Advance Wars jumps to 0x910803DE at frame 15 and
   gpsp-host crashes), with the .gba as much as the .gbz. Check real ROMs'
   .gbz files page by page with `nspire_gbz.c` instead (all pages equal the
-  ROM), and play-test on the calculator.
+  ROM). The ARM core under qemu (`tests/arm/replay.c`) does play them:
+  Emerald, Fire Emblem, Golden Sun and Minish Cap ran 6000 frames from the
+  start with every setting, frame for frame the same per renderer (video.cc
+  blends a few things legacy draws solid, like Fire Emblem's place names
+  fading in). Advance Wars jumps to 0x910803DE there too, at its 4th frame,
+  also with v0.4.1's code, the built-in BIOS, or its link-cable mode off: so
+  it's in the core, and whether the calculator does it isn't known yet.
+* The calculator checks alignment: an unaligned load or store crashes it
+  (the video.cc crash above). qemu-arm only stops on unaligned `ldm`/`stm`,
+  so casts of a pointer to a wider type need checking by hand.
+* Semihosting (the qemu tests' newlib) splits the command line at spaces:
+  `tests/arm/run.sh` links the games to names without them.
+* A game without a save file starts with its save memory all 0xFF
+  (`load_backup`); the qemu tests do the same (Advance Wars read zeros as
+  a damaged save before).
 * `make | head` (or any pipe that closes early) stops make with SIGPIPE and
   leaves the old `.tns`: check the file's time and md5 after building.
 * An old gpSP build wrote `..cfg.tns` (a game's settings with no game open)
@@ -214,6 +286,8 @@ PC only (not seen on the calculator yet):
   saves, the save manager, the `(` `)` slot keys, the fast forward counter.
 * The saves folder and moving the old files in, the settings in the
   program file, the ROM manager (how long zipping a 16 MB ROM takes).
+* The scene-change crash fixes (video.cc's fill, Partial SMC): seen only
+  under qemu-arm so far.
 
 
 History
@@ -247,6 +321,10 @@ History
   yet seen on the calculator. A GBA zip opened from My Documents starts
   PocketSNES (it owns .zip); PocketSNES now says to start it in gpSP
   instead of running it.
+* 2026-10-11, late: the scene-change crash (upstream issues #3-#5, see
+  above): video.cc's fill and Partial SMC fixed. The core runs under
+  qemu-arm now, on a test ROM and on real games from save states
+  (`tests/arm`).
 
 
 Open items and ideas

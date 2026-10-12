@@ -3156,9 +3156,11 @@ bool translate_block_arm(u32 pc, bool ram_region)
     }
     else
     {
-      /* Deferred patch list must match arm_emit.h: only PCs emitted as direct
-       * PC-relative branches get patched here. Partial: BIOS + cart ROM only.
-       * Classic: same plus IW/EW RAM (lookup never returns (u8*)~0 for these). */
+      /* Linked directly (patched once the target is translated): BIOS and
+       * cart ROM; with Classic SMC also IW/EW RAM, as a full flush drops
+       * every block on a RAM write. Partial SMC drops only the written
+       * block, so a direct link into RAM code could run stale code: those
+       * exits go through the PC lookup below. */
 #if defined(NSPIRE_LIBRETRO)
       if ((nspire_dynarec_ram_policy
             && GPSP_PC_RELATIVE_TRANS_REGION(branch_target))
@@ -3176,6 +3178,17 @@ bool translate_block_arm(u32 pc, bool ram_region)
         external_block_exits[external_block_exit_position].branch_source =
          block_exits[i].branch_source;
         external_block_exit_position++;
+      }
+      else
+      {
+        /* Not linked: the branch looks its target up by PC, as BX does.
+         * Its placeholder (B +0) would run the next host instructions
+         * instead, so Partial SMC froze or crashed games whose IWRAM code
+         * branches between its blocks (Pokemon Emerald at boot). */
+        generate_branch_patch_unconditional(block_exits[i].branch_source,
+         translation_ptr);
+        generate_update_pc(branch_target);
+        generate_indirect_branch_no_cycle_update(arm);
       }
     }
   }
@@ -3351,6 +3364,17 @@ bool translate_block_thumb(u32 pc, bool ram_region)
         external_block_exits[external_block_exit_position].branch_source =
          block_exits[i].branch_source;
         external_block_exit_position++;
+      }
+      else
+      {
+        /* Not linked: the branch looks its target up by PC, as BX does.
+         * Its placeholder (B +0) would run the next host instructions
+         * instead, so Partial SMC froze or crashed games whose IWRAM code
+         * branches between its blocks (Pokemon Emerald at boot). */
+        generate_branch_patch_unconditional(block_exits[i].branch_source,
+         translation_ptr);
+        generate_update_pc(branch_target);
+        generate_indirect_branch_no_cycle_update(thumb);
       }
     }
   }

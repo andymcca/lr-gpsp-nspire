@@ -8,6 +8,11 @@ its disassembly. Needs the Ndless toolchain on PATH (arm-none-eabi-objdump).
   writes onto the stack, which Ndless maps write-back cached. The data cache
   must be written back and the instruction cache emptied before the first
   of those calls, or the CPU can run stale bytes (nspire_sync_written_code).
+* video_fill_u16_strip_arm (nspire/scanline_fill16.S) stores 16 bytes at a
+  time with stmia, which needs a word address: the calculator checks
+  alignment and crashed when video.cc filled from an odd pixel (Pokemon
+  battle wipes). An odd start must be stored alone before the first stmia.
+  tests/arm/fill_test.c runs it; this checks the build has that version.
 """
 
 import re
@@ -51,6 +56,19 @@ def main():
         failed += 1
     else:
         print("menu(): caches synced before its first trampoline call")
+    fill = function(dis, "video_fill_u16_strip_arm")
+    stm = next((i for i, l in enumerate(fill) if re.search(r"\sstm(ia)?\s+r0!", l)), None)
+    align = next((i for i, l in enumerate(fill) if re.search(r"\stst\s+r0, #2\b", l)), None)
+    if not fill:
+        print("FAIL: no video_fill_u16_strip_arm in %s" % ELF)
+        failed += 1
+    elif stm is None:
+        print("note: video_fill_u16_strip_arm has no stmia")
+    elif align is None or align > stm:
+        print("FAIL: video_fill_u16_strip_arm stores with stmia without aligning an odd start first")
+        failed += 1
+    else:
+        print("video_fill_u16_strip_arm: an odd start is stored alone before the first stmia")
     print("%d failed" % failed)
     return 1 if failed else 0
 
