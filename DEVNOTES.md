@@ -223,6 +223,42 @@ settings, 8 and 32 MB, the .gba and the zip) reach the same battle frame for
 frame; on the unfixed code only legacy + Classic got there.
 
 
+The Advance Wars crash: a damaged ROM
+-------------------------------------
+
+The owner's Advance Wars crashed as it started, with every setting, under
+qemu as well, and on the PC's interpreter (`gpsp-host` segfaulted at frame
+15). It's the ROM: CRC32 418740D0 is no known dump (No-Intro: Rev 1
+26FD0FC9, Rev 0 DBEF116C, Virtual Console BDE36F98; the other four games
+match No-Intro exactly). Its table at 0x082E7CF8, which 11 places in the
+game read, has wrong top bytes on its pointers (`df 03 08 91` where
+0x080803DF belongs, `77 2e 08 00`...), so the game calls 0x910803DF a
+quarter of a second in. A GBA would crash the same way; a good copy of the
+game is the only fix. It was already like that on the calculator before
+any of our transfers (same md5 as downloaded on 2026-10-11).
+
+Found with the interpreter on the PC printing every instruction: build
+`cpu.cc` and `main.c` with `-DTRACE_INSTRUCTIONS -DTRACE_REGISTERS`, run
+the game, and keep the instructions before the first one outside memory
+(`awk`'s ring buffer). The No-Intro list is libretro-database's
+`metadat/no-intro/Nintendo - Game Boy Advance.dat`.
+
+What gpSP does about such games now: **a jump where no code can run stops
+the game with a message** instead of crashing the calculator (it reset).
+The dynarec's lookup returns (u8*)~0 for regions with no code; the stubs
+used to jump there. `block_lookup_address_*` now record the PC
+(`nspire_bad_jump`, cpu.h) and return `arm_return_to_main`, so
+`execute_arm_translate` returns; the interpreter (PC tests) checks the same
+when the PC changes region. `game_stopped` (nspire_host_main.c) shows
+"Stopped", the game's name and where it jumped, closes the game without
+saving a state of it (its memory is in pieces; its in-game save is kept),
+and the file list comes back as after a game that doesn't load. The speed
+test just stops and puts the game back. Tests: `tests/arm/badjump_test.c`
+(rom/bad_jump.S jumps there in Thumb and ARM state), the owner's damaged
+ROM in the ARM tests (when it's in `$GBA_GAMES`), and the host scenario
+damaged_rom (the screens, the file list after, no state saved).
+
+
 Gotchas
 -------
 
@@ -251,9 +287,9 @@ Gotchas
   Emerald, Fire Emblem, Golden Sun and Minish Cap ran 6000 frames from the
   start with every setting, frame for frame the same per renderer (video.cc
   blends a few things legacy draws solid, like Fire Emblem's place names
-  fading in). Advance Wars jumps to 0x910803DE there too, at its 4th frame,
-  also with v0.4.1's code, the built-in BIOS, or its link-cable mode off: so
-  it's in the core, and whether the calculator does it isn't known yet.
+  fading in). (Advance Wars failed on both because the owner's ROM is
+  damaged, above; the interpreter's segfault was its fetch past
+  `memory_map_read`, which now stops instead.)
 * The calculator checks alignment: an unaligned load or store crashes it
   (the video.cc crash above). qemu-arm only stops on unaligned `ldm`/`stm`,
   so casts of a pointer to a wider type need checking by hand.
@@ -288,6 +324,8 @@ PC only (not seen on the calculator yet):
   program file, the ROM manager (how long zipping a 16 MB ROM takes).
 * The scene-change crash fixes (video.cc's fill, Partial SMC): seen only
   under qemu-arm so far.
+* A game jumping where no code can run stops with a message (the damaged
+  Advance Wars): qemu-arm and the PC tests only.
 
 
 History
@@ -325,6 +363,9 @@ History
   above): video.cc's fill and Partial SMC fixed. The core runs under
   qemu-arm now, on a test ROM and on real games from save states
   (`tests/arm`).
+* 2026-10-11, late: the owner's Advance Wars turned out to be a damaged
+  ROM; a game that jumps where no code can run now stops with a message
+  instead of crashing the calculator.
 
 
 Open items and ideas

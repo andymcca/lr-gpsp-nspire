@@ -32,20 +32,30 @@ static u32 bar_done, bar_total;
 
 extern void (*nspire_rom_progress)(u32 done, u32 total);
 
-/* line may have a second line after a '\n'; more goes under it. */
-static void draw(const char *line, u16 line_color, const char *more)
+/* line may have a second line after a '\n'; more goes under it. Without
+ * the bar, line goes where the bar would be. */
+static void draw_screen(const char *title, int bar, const char *line, u16 line_color,
+                        const char *more)
 {
   clear_screen(COLOR_BACK);
-  print_string("Loading", COLOR_TEXT, COLOR_BACK, BAR_X, 80);
+  print_string(title, COLOR_TEXT, COLOR_BACK, BAR_X, 80);
   print_string(game_name, COLOR_TITLE, COLOR_BACK, BAR_X, 92);
-  fill_rect(BAR_X, BAR_Y, BAR_W, BAR_H, COLOR_EMPTY);
-  if (bar_total)
-    fill_rect(BAR_X, BAR_Y, (u32)((u64)BAR_W * bar_done / bar_total), BAR_H, COLOR_BAR);
+  if (bar)
+  {
+    fill_rect(BAR_X, BAR_Y, BAR_W, BAR_H, COLOR_EMPTY);
+    if (bar_total)
+      fill_rect(BAR_X, BAR_Y, (u32)((u64)BAR_W * bar_done / bar_total), BAR_H, COLOR_BAR);
+  }
   if (line)
-    print_string(line, line_color, COLOR_BACK, BAR_X, 124);
+    print_string(line, line_color, COLOR_BACK, BAR_X, bar ? 124 : BAR_Y);
   if (more)
     print_string(more, COLOR_TEXT, COLOR_BACK, BAR_X, 150);
   flip_screen();
+}
+
+static void draw(const char *line, u16 line_color, const char *more)
+{
+  draw_screen("Loading", 1, line, line_color, more);
 }
 
 static void rom_progress(u32 done, u32 total)
@@ -79,6 +89,18 @@ void nspire_loading_note(const char *text)
 void nspire_loading_end(void)
 {
   nspire_rom_progress = NULL;
+}
+
+void nspire_game_stopped(const char *why)
+{
+  keys_wait_release();
+  do
+  {
+    draw_screen("Stopped", 0, why, COLOR_ERROR, "Press a key.");
+    update_at_vblank();
+    keys_poll();
+  } while (!any_key_down());
+  keys_wait_release();
 }
 
 void nspire_loading_failed(const char *why)

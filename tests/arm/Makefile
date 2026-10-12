@@ -7,6 +7,8 @@
 #   dynarec_test  the core with its ARM dynarec on rom/ram_code.S: code in
 #                 RAM branching between its blocks and rewritten, with either
 #                 "Dynarec RAM / SMC" setting
+#   badjump_test  the core on rom/bad_jump.S, which jumps where no code can
+#                 run (as a damaged Advance Wars does): it has to stop there
 #   replay        the core playing a real game from a save state (run.sh
 #                 runs it on Pokemon Emerald when $GBA_GAMES has it)
 # The calculator's files are compiled as for the calculator (nspire-gcc,
@@ -50,7 +52,8 @@ CORE_OBJS := $(addprefix $(BUILD)/core_,$(addsuffix .o,$(CORE_C))) $(BUILD)/core
              $(BUILD)/video_cc_renderer.o $(BUILD)/old_video_renderer.o $(BUILD)/core_stubs.o \
              $(BUILD)/newlib_shim.o
 
-all: $(BUILD)/blend_test $(BUILD)/fill_test $(BUILD)/dynarec_test $(BUILD)/replay $(BUILD)/ram_code.gba
+all: $(BUILD)/blend_test $(BUILD)/fill_test $(BUILD)/dynarec_test $(BUILD)/replay $(BUILD)/ram_code.gba \
+     $(BUILD)/badjump_test $(BUILD)/bad_jump_thumb.gba $(BUILD)/bad_jump_arm.gba
 
 $(BUILD):
 	mkdir -p $@
@@ -119,16 +122,26 @@ $(BUILD)/dynarec_test.o: dynarec_test.c | $(BUILD)
 	arm-none-eabi-gcc $(CORE_FLAGS) -std=gnu99 -c $< -o $@
 $(BUILD)/replay.o: replay.c | $(BUILD)
 	arm-none-eabi-gcc $(CORE_FLAGS) -std=gnu99 -c $< -o $@
+$(BUILD)/badjump_test.o: badjump_test.c | $(BUILD)
+	arm-none-eabi-gcc $(CORE_FLAGS) -std=gnu99 -c $< -o $@
 
 $(BUILD)/dynarec_test: $(BUILD)/dynarec_test.o $(CORE_OBJS)
 	arm-none-eabi-g++ $(ARCH) -specs=rdimon.specs $^ $(LIBZ) -lm -o $@
 $(BUILD)/replay: $(BUILD)/replay.o $(CORE_OBJS)
+	arm-none-eabi-g++ $(ARCH) -specs=rdimon.specs $^ $(LIBZ) -lm -o $@
+$(BUILD)/badjump_test: $(BUILD)/badjump_test.o $(CORE_OBJS)
 	arm-none-eabi-g++ $(ARCH) -specs=rdimon.specs $^ $(LIBZ) -lm -o $@
 
 # The test ROM: ARM code at the cartridge's address, as a plain image.
 $(BUILD)/ram_code.gba: rom/ram_code.S | $(BUILD)
 	arm-none-eabi-gcc $(ARCH) -nostdlib -Wl,-Ttext=0x08000000 -Wl,-e,_start $< -o $(BUILD)/ram_code.elf
 	arm-none-eabi-objcopy -O binary $(BUILD)/ram_code.elf $@
+$(BUILD)/bad_jump_thumb.gba: rom/bad_jump.S | $(BUILD)
+	arm-none-eabi-gcc $(ARCH) -nostdlib -Wl,-Ttext=0x08000000 -Wl,-e,_start -Wa,--defsym,THUMB=1 $< -o $(BUILD)/bad_jump_thumb.elf
+	arm-none-eabi-objcopy -O binary $(BUILD)/bad_jump_thumb.elf $@
+$(BUILD)/bad_jump_arm.gba: rom/bad_jump.S | $(BUILD)
+	arm-none-eabi-gcc $(ARCH) -nostdlib -Wl,-Ttext=0x08000000 -Wl,-e,_start -Wa,--defsym,THUMB=0 $< -o $(BUILD)/bad_jump_arm.elf
+	arm-none-eabi-objcopy -O binary $(BUILD)/bad_jump_arm.elf $@
 
 clean:
 	rm -rf $(BUILD)

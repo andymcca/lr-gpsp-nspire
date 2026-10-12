@@ -2662,12 +2662,32 @@ u8 function_cc *block_lookup_address_dual(u32 pc)
   }
 }
 
+#ifdef NSPIRE_LIBRETRO
+/* arm_stub.S: back to whatever called execute_arm_translate. */
+extern u8 arm_return_to_main[];
+
+/* No code can run at pc (the lookup's (u8*)~0: no memory, I/O, save
+ * memory...), or it couldn't be translated: stop there (cpu.h) rather than
+ * jump to that marker, which crashed the calculator. The lookups get the
+ * PC with its low bits as the branch left them (Thumb bit, ARM + 2). */
+static u8 *nspire_stop_at(u32 pc)
+{
+  nspire_bad_jump = 1;
+  nspire_bad_jump_pc = pc;
+  return arm_return_to_main;
+}
+#endif
+
 u8 function_cc *block_lookup_address_arm(u32 pc)
 {
   unsigned i;
   for (i = 0; i < 4; i++) {
     u8 *ret = block_lookup_translate_arm(pc);
     if (ret) {
+#ifdef NSPIRE_LIBRETRO
+      if (ret == (u8 *)(~0))
+        return nspire_stop_at(pc & ~3);
+#endif
       translate_icache_sync();
       return ret;
     }
@@ -2675,7 +2695,11 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
 
   printf("bad jump %x (%x)\n", pc, reg[REG_PC]);
   fflush(stdout);
+#ifdef NSPIRE_LIBRETRO
+  return nspire_stop_at(pc & ~3);
+#else
   return NULL;
+#endif
 }
 
 u8 function_cc *block_lookup_address_thumb(u32 pc)
@@ -2684,13 +2708,21 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
   for (i = 0; i < 4; i++) {
     u8 *ret = block_lookup_translate_thumb(pc);
     if (ret) {
+#ifdef NSPIRE_LIBRETRO
+      if (ret == (u8 *)(~0))
+        return nspire_stop_at(pc & ~1);
+#endif
       translate_icache_sync();
       return ret;
     }
   }
   printf("bad jump %x (%x)\n", pc, reg[REG_PC]);
   fflush(stdout);
+#ifdef NSPIRE_LIBRETRO
+  return nspire_stop_at(pc & ~1);
+#else
   return NULL;
+#endif
 }
 
 // Potential exit point: If the rd field is pc for instructions is 0x0F,

@@ -1407,6 +1407,44 @@ quit
     check(bad.shot("list").active_list_row() == 0, "broken zip: then the file list")
 
 
+def test_damaged_rom():
+    """A game that jumps where no code can run (as an Advance Wars from a bad
+    dump does, to 910803DE, as it starts) stops with a message instead of
+    crashing; a key brings back the file list, and no state is saved of it."""
+    r = Run("damaged", roms=("Pattern",))
+    # ldr r0, [pc]; bx r0; .word 0x910803DF: a Thumb jump past the GBA's memory
+    words_file(r.file("Damaged.gba.tns"), [0xE59F0000, 0xE12FFF10, 0x910803DF])
+    r.run(REAL_COSTS + """wait 1
+press enter
+wait 1
+shot stopped
+press enter
+wait 1
+shot list
+press down
+press enter
+wait 2
+shot game
+quit
+""")
+    stopped = r.shot("stopped")
+    back = stopped.at(5, 5)
+
+    def text(y0, y1):
+        return [stopped.at(x, y) for y in range(y0, y1) for x in range(320) if stopped.at(x, y) != back]
+
+    title_x = [x for y in range(78, 104) for x in range(320) if stopped.at(x, y) != back]
+    check(title_x and min(title_x) == 30, "damaged ROM: \"Stopped\" and the game's name from x 30")
+    why = text(108, 132)
+    check(any(p[0] > 200 and p[2] < 60 for p in why), "damaged ROM: it says why, in the error color")
+    check(text(148, 160), "damaged ROM: and to press a key")
+    check(not text(132, 146) and not text(162, 240), "damaged ROM: nothing else (no loading bar)")
+    check(r.shot("list").active_list_row() == 0, "damaged ROM: then the file list")
+    check(r.shot("game").box() == (0, 13, 319, 226), "damaged ROM: and another game starts")
+    states = [f for f in os.listdir(os.path.join(r.dir, "zgpSP_saves")) if f.startswith("Damaged") and ".svs" in f]
+    check(not states, "damaged ROM: no state saved of it: %s" % states)
+
+
 def test_slot_keys():
     """) and ( pick the next and previous slot: L loads the one picked."""
     r = Run("slot_keys").run(REAL_COSTS + """wait 1
@@ -1513,7 +1551,7 @@ def test_every_menu_line():
 TESTS = [test_play, test_menu, test_menu_slow_game, test_old_settings, test_unscaled_chosen,
          test_brightness, test_states, test_number_keys, test_move_and_sort, test_speed_test,
          test_hotkeys_in_menu_keys, test_folders, test_gbz, test_menu_load_and_exit, test_frameskip,
-         test_fps_counter_and_fast_forward, test_blended, test_loading_screen, test_zipped_game,
+         test_fps_counter_and_fast_forward, test_blended, test_loading_screen, test_zipped_game, test_damaged_rom,
          test_slot_keys, test_save_manager, test_every_menu_line, test_states_from_older_builds,
          test_file_types, test_new_calculator, test_no_gba_folder, test_old_layout, test_old_saves_folder,
          test_rom_manager]

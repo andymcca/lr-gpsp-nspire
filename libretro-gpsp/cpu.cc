@@ -562,6 +562,7 @@ const u8 bit_count[256] =
   new_pc_region = (reg[REG_PC] >> 15);                                        \
   if(new_pc_region != pc_region)                                              \
   {                                                                           \
+    nspire_stop_if_nowhere();                                                 \
     pc_region = new_pc_region;                                                \
     pc_address_block = memory_map_read[new_pc_region];                        \
     touch_gamepak_page(pc_region);                                            \
@@ -1460,18 +1461,42 @@ u8 vram[1024 * 96];
 u16 io_registers[512];
 #endif
 
+#ifdef NSPIRE_LIBRETRO
+u32 nspire_bad_jump, nspire_bad_jump_pc;
+
+/* Where no code can run: no memory (region 01), the I/O registers (04),
+ * the cartridge's save memory (0E, 0F) and anything above, which
+ * memory_map_read doesn't even cover. */
+static bool nspire_pc_runs_nowhere(u32 pc)
+{
+  u32 region = pc >> 24;
+  return region == 0x01 || region == 0x04 || region >= 0x0E;
+}
+#define nspire_stop_if_nowhere()                                              \
+  if (nspire_pc_runs_nowhere(reg[REG_PC]))                                    \
+  {                                                                           \
+    nspire_bad_jump = 1;                                                      \
+    nspire_bad_jump_pc = reg[REG_PC];                                         \
+    return;                                                                   \
+  }
+#else
+#define nspire_stop_if_nowhere()
+#endif
+
 void execute_arm(u32 cycles)
 {
   u32 opcode;
   u32 condition;
   u32 n_flag, z_flag, c_flag, v_flag;
   u32 pc_region = (reg[REG_PC] >> 15);
-  u8 *pc_address_block = memory_map_read[pc_region];
+  u8 *pc_address_block;
   u32 new_pc_region;
   s32 cycles_remaining;
   u32 update_ret;
   cpu_alert_type cpu_alert;
 
+  nspire_stop_if_nowhere();
+  pc_address_block = memory_map_read[pc_region];
   if(!pc_address_block)
     pc_address_block = load_gamepak_page(pc_region & 0x3FF);
   touch_gamepak_page(pc_region);

@@ -9,7 +9,9 @@
 #   gba_bios.bin                                  the GBA BIOS
 #   emerald_route_grass.svs.tns                   a gpSP save state on a
 #                                                 route next to tall grass
-# Without them it's skipped (said so at the end).
+#   Advance Wars (USA) (Rev 1) (damaged).gba      the owner's bad dump (CRC32
+#                                                 418740D0, not No-Intro's)
+# Without them those are skipped (said so).
 set -u
 cd "$(dirname "$0")"
 QEMU=${QEMU:-$HOME/nspire/build/tools/qemu/root/usr/bin/qemu-arm}
@@ -37,6 +39,8 @@ run blend_test build/blend_test
 run fill_test build/fill_test
 run "dynarec_test, Partial SMC" build/dynarec_test build/ram_code.gba 0
 run "dynarec_test, Classic SMC" build/dynarec_test build/ram_code.gba 1
+run "badjump_test, Thumb" build/badjump_test build/bad_jump_thumb.gba 910803DE
+run "badjump_test, ARM" build/badjump_test build/bad_jump_arm.gba 0E000000
 
 # Pokemon Emerald from a save state: into the tall grass until a wild
 # Pokemon appears (its battle wipe draws window edges on odd pixels; the
@@ -88,6 +92,28 @@ if [ -f "$emerald" ] && [ -f "$GBA_GAMES/gba_bios.bin" ] && [ -f "$GBA_GAMES/eme
   [ $replay_failed = 0 ] || failed=$((failed + 1))
 else
   echo "skipped: Emerald replay (no game, BIOS or state in $GBA_GAMES)"
+fi
+
+# The owner's Advance Wars, a bad dump: a function pointer of its reads as
+# 0x910803DF, and the game jumps there as it starts (the calculator reset).
+# gpSP has to stop there instead.
+aw="$GBA_GAMES/Advance Wars (USA) (Rev 1) (damaged).gba"
+if [ -f "$aw" ] && [ -f "$GBA_GAMES/gba_bios.bin" ]; then
+  mkdir -p build/games build/replays
+  ln -sf "$aw" build/games/aw_damaged.gba
+  ln -sf "$GBA_GAMES/gba_bios.bin" build/games/gba_bios.bin
+  : > build/replays/no_keys
+  "$QEMU" -cpu arm926 build/replay build/games/aw_damaged.gba build/games/gba_bios.bin - 32 0 0 300 \
+    build/replays/no_keys > build/replays/aw_damaged.txt 2>&1
+  status=$?
+  if [ $status = 3 ] && grep -q "stopped at 910803DE" build/replays/aw_damaged.txt; then
+    echo "PASS: the damaged Advance Wars stops at its jump to 910803DE ($(cut -d' ' -f1-2 build/replays/aw_damaged.txt))"
+  else
+    echo "FAIL  the damaged Advance Wars: $([ $status -gt 128 ] && echo "crashed (signal $((status - 128)))" || echo "exit $status: $(tail -1 build/replays/aw_damaged.txt)")"
+    failed=$((failed + 1))
+  fi
+else
+  echo "skipped: the damaged Advance Wars (not in $GBA_GAMES)"
 fi
 
 [ $failed = 0 ] && echo "ARM tests: all passed" || echo "ARM tests: $failed failed"

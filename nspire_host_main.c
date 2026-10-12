@@ -412,6 +412,51 @@ static void core_bootstrap(void)
 
 /* ---- Playing ---- */
 
+static int in_speed_test;
+
+/* The game jumped where no code can run (nspire_bad_jump, cpu.h): a damaged
+ * ROM (an Advance Wars from a bad dump does it as it starts) or a game gone
+ * wrong. The core stopped there instead of crashing the calculator. This
+ * says so and closes the game without saving a state of it (it's in
+ * pieces); then the file list comes up again, as after a game that doesn't
+ * load (leaving it opens the menu, without a game). */
+static void game_stopped(void)
+{
+  char why[96];
+  u8 load_filename[512];
+  int started = 0;
+
+  nspire_clock_normal();
+  nspire_perf_log_flush();
+  nspire_input_release_all();
+  video_resolution_large();
+  snprintf(why, sizeof(why), "It jumped to %08X, where nothing\ncan run: its ROM is probably damaged.",
+           (unsigned)nspire_bad_jump_pc);
+  nspire_bad_jump = 0;
+  nspire_game_stopped(why);
+  update_backup_force();
+  nspire_config_close_game();
+  gamepak_filename[0] = 0;
+
+  switch_to_romdir();
+  while (!started)
+  {
+    if (load_file(file_ext, load_filename) == -1)
+    {
+      menu(copy_screen());
+      break;
+    }
+    started = nspire_start_game((char *)load_filename);
+  }
+  if (started)
+  {
+    set_gba_resolution((video_scale_type)screen_scale);
+    video_resolution_small();
+  }
+  nspire_clock_game();
+  nspire_reset_timing();
+}
+
 static void run_frame(void)
 {
   u32 output_ticks = 0;
@@ -427,6 +472,13 @@ static void run_frame(void)
   {
     clear_gamepak_stickybits();
     execute_arm(execute_cycles);
+  }
+  if (nspire_bad_jump)
+  {
+    /* The speed test stops and puts the game back as it was. */
+    if (!in_speed_test)
+      game_stopped();
+    return;
   }
 
   process_cheats();
@@ -589,6 +641,7 @@ void nspire_speed_test(void)
   mhz = nspire_cpu_mhz();
   keys_wait_release();
   synchronize_flag = 1;
+  in_speed_test = 1;
   for (i = 0; i < SPEED_TEST_PARTS && !stopped; i++)
   {
     const struct speed_test_part *part = &speed_test_parts[i];
@@ -614,11 +667,18 @@ void nspire_speed_test(void)
         break;
       }
       run_frame();
+      if (nspire_bad_jump)
+      {
+        stopped = 1;
+        break;
+      }
     }
     stats[i] = nspire_perf_since(&base, nspire_ticks());
     done = i + 1;
   }
 
+  in_speed_test = 0;
+  nspire_bad_jump = 0;
   nspire_pace = PACE_NORMAL;
   current_frameskip_type = saved_type;
   frameskip_value = saved_value;

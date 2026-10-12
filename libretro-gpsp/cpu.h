@@ -209,6 +209,13 @@ extern u8 *bios_swi_entrypoint;
   )
 #define GPSP_TRANSLATION_TARGET_INVALID(p)                                    \
   ((p) == NULL || (p) == (u8 *)(u32)-1)
+
+/* A jump where no code can run (a damaged ROM: an Advance Wars from a bad
+ * dump jumps to 910803DE as it starts) stops the CPU there instead of
+ * running garbage, which crashed the calculator: nspire_bad_jump is set,
+ * nspire_bad_jump_pc says where, and execute_arm_translate (or the
+ * interpreter's execute_arm) returns. The frontend says so. */
+extern u32 nspire_bad_jump, nspire_bad_jump_pc;
 #endif
 
 #endif

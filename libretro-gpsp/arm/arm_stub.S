@@ -441,7 +441,9 @@ defsymbl(execute_arm_translate_internal)
 
 
 @ Epilogue to return to the main thread (whatever called execute_arm_translate)
+@ (arm_return_to_main: block_lookup_address_* returns it to stop there)
 
+defsymbl(arm_return_to_main)
 return_to_main:
   @ restore the saved regs and return
   ldmia sp!, { r4, r5, r6, r7, r8, r9, r10, r11, r12, lr }

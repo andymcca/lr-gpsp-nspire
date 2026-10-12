@@ -3,7 +3,8 @@
  * dynarec, both renderers and the ROM page cache, under qemu-arm), from a
  * save state or from the start, pressing keys from a script. It prints a
  * hash of every 50th frame and of the last one; tests/arm/run.sh compares
- * the settings with each other and with what a good run gave.
+ * the settings with each other and with what a good run gave. A game that
+ * jumps where no code can run (cpu.h) prints "stopped at PC" and exits 3.
  *
  *   replay ROM BIOS STATE|- ROMBUF_MB POLICY RENDERER FRAMES KEYS [PPMDIR]
  *
@@ -200,6 +201,11 @@ int main(int argc, char **argv)
   {
     write_ioreg(REG_P1, (~keys_at(frame)) & 0x3FF);
     execute_arm_translate(execute_cycles);
+    if (nspire_bad_jump)
+    {
+      printf("frame %d stopped at %08X\n", frame, (unsigned)nspire_bad_jump_pc);
+      return 3;
+    }
     if (frame % 50 == 0 || frame == frames)
     {
       printf("frame %d %08x\n", frame, (unsigned)frame_hash());

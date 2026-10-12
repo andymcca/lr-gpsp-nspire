@@ -69,6 +69,9 @@ void nspire_loading_start(const char *rom_path);
 void nspire_loading_note(const char *text);
 void nspire_loading_end(void);
 void nspire_loading_failed(const char *why);
+/* A game that stopped (nspire_bad_jump, cpu.h): its name and why, on the
+ * loading screen's layout, until a key is pressed. */
+void nspire_game_stopped(const char *why);
 /* Why the last ROM didn't load, when gba_memory.c can say (else NULL). */
 extern const char *nspire_rom_load_error;
 

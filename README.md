@@ -71,6 +71,12 @@ options, *Dynarec RAM / SMC*) ran code that games keep in RAM wrongly, so
 Pokemon Emerald froze right after loading a state. Both renderers, both
 *Dynarec RAM / SMC* settings and every ROM buffer size work now.
 
+**A damaged ROM stops with a message.** A game that jumps where no code can
+run (a bad dump of Advance Wars does as it starts) used to reset the
+calculator. Now gpSP shows "Stopped", the game and where it jumped, and the
+file list comes back; no state is saved of it. A good copy of the game is
+the fix for that one.
+
 **Screen.** On the CX II the picture is turned for the portrait LCD in software
 and shown from one of three buffers, which the LCD switches between only
 between refreshes: no diagonal tearing (that came from Ndless's compatibility
@@ -252,8 +258,9 @@ in `~/nspire/build/testroms/gba/gba-tests`):
   states, number keys, moving and sorting games, folders, `.gbz` ROMs, auto
   frameskip, the FPS counter and fast forward, the speed test, the blended
   pictures with their text bands, the loading screen, zipped games and one
-  that won't load, the slot keys, the save manager, and that every menu
-  line's help fits. `python3 tests/host/host_tests.py menu` runs one.
+  that won't load, a damaged ROM that stops, the slot keys, the save
+  manager, and that every menu line's help fits. `python3
+  tests/host/host_tests.py menu` runs one.
 
 `tests/calc_checks.py` (needs the Ndless toolchain) checks the calculator
 build's disassembly for what a PC can't show: that `menu()` syncs the caches
@@ -269,10 +276,12 @@ a plain per-pixel version of the math says, and nothing written outside the
 picture. Also video.cc's backdrop fill at every start pixel and length (it
 crashed on odd ones), and the core with its dynarec on a small test ROM
 whose code in RAM calls, loops and is rewritten by DMA and by the CPU, with
-both *Dynarec RAM / SMC* settings. With the game, its BIOS and a save state
+both *Dynarec RAM / SMC* settings, and on one that jumps where no code can
+run (it has to stop there). With the game, its BIOS and a save state
 in `$GBA_GAMES` (see `tests/arm/run.sh`), Pokemon Emerald is played from the
 state into a wild battle with both renderers, both SMC settings, 8 and 32 MB
 ROM buffers and as a zip: all must reach the same battle frame for frame.
+A damaged Advance Wars there has to stop at its bad jump.
 
 ## Releases
 
