@@ -314,6 +314,9 @@ Seen (on the calculator):
   number keys in the file list, brightness (the user set level 9).
 * 48 fps in Pokemon Emerald with scaled/blended 3:2 and interframe blending
   (before the one-pass blended pictures).
+* The scene-change crash fixes: a Pokemon Emerald wild encounter with
+  video.cc, Partial SMC and a 16 MB ROM buffer, the settings that crashed
+  (2026-10-11, build f2218af2 + settings).
 
 PC only (not seen on the calculator yet):
 * The one-pass blended pictures (uploaded 2026-10-10; estimated picture
@@ -322,8 +325,6 @@ PC only (not seen on the calculator yet):
   saves, the save manager, the `(` `)` slot keys, the fast forward counter.
 * The saves folder and moving the old files in, the settings in the
   program file, the ROM manager (how long zipping a 16 MB ROM takes).
-* The scene-change crash fixes (video.cc's fill, Partial SMC): seen only
-  under qemu-arm so far.
 * A game jumping where no code can run stops with a message (the damaged
   Advance Wars): qemu-arm and the PC tests only.
 
