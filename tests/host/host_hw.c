@@ -5,7 +5,9 @@
  *   gpsp-host SCRIPT OUTDIR GAMEDIR [ROM]
  *
  * gpSP runs as it does on the calculator (its main(), menus, file list and
- * game loop), as GAMEDIR/gpsp_qol.tns. Virtual time moves a little at every
+ * game loop), as GAMEDIR/_gpSP.tns, with GAMEDIR's parent folder as the
+ * calculator's documents (its ndless/ndless.cfg.tns has the file types
+ * Ndless opens with each program). Virtual time moves a little at every
  * read of the timer, the keypad or the LCD, so gpSP's waits pass time and
  * its frames come at its own pace. Work that takes time on the calculator
  * but none here (running a frame of the game, drawing a line, turning a
@@ -513,6 +515,13 @@ void cfg_register_fileext(const char *ext, const char *prgm)
   snprintf(registered + len, sizeof(registered) - len, "%s%s=%s", len ? "," : "", ext, prgm);
 }
 
+static char documents_dir[600];
+
+const char *get_documents_dir(void)
+{
+  return documents_dir;
+}
+
 int NU_Current_Dir(const char *drive, char *path)
 {
   (void)drive;
@@ -656,7 +665,11 @@ int main(int argc, char *argv[])
   }
   if (!getcwd(exe, sizeof(exe) - 20))
     return 2;
-  strcat(exe, "/gpsp_qol.tns");
+  /* The documents: the game folder's parent, with a slash, as Ndless gives it. */
+  snprintf(documents_dir, sizeof(documents_dir), "%s", exe);
+  if (strrchr(documents_dir, '/'))
+    strrchr(documents_dir, '/')[1] = 0;
+  strcat(exe, "/_gpSP.tns");
   args[0] = exe;
   args[1] = argc > 4 ? argv[4] : NULL;
   args[2] = NULL;

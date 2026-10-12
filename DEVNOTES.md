@@ -41,7 +41,7 @@ simulator's screenshots of anything changed on screen get looked at
 (`tests/host/build/host_tests/NAME/out/*.ppm`). `python3 -I
 tests/host/host_tests.py NAME` runs one scenario.
 
-To the calculator: `nspire-link put -f gpsp_libretro.tns /gba/gpsp_qol.tns`,
+To the calculator: `nspire-link put -f gpsp_libretro.tns /gba/_gpSP.tns`,
 then `get` it back and compare checksums. The calculator only answers over
 USB at its home screen (not while a program runs), and other sessions may
 be using `nspire-link`: check `pgrep -x nspire-link` first.
@@ -111,6 +111,13 @@ Decisions and why
   quit gpSP.
 * **The newest state** is the one with the highest save counter among this
   build's states, else the latest file time (states from older builds).
+* **The program is `_gpSP.tns`** on the calculator (it was `gpsp_qol.tns`):
+  the underscore sorts it above the games, so the folder opens on it, as
+  `_PocketSNES.tns` does in PocketSNES. File types in `ndless.cfg.tns` that
+  name a gpSP like this one (`gpsp_` or `_gpsp` names) are pointed at the
+  name it runs as (`register_rom_types`), as PocketSNES does with its old
+  names; `gpspnspire_gpsp_launcher` (another port) and other programs keep
+  theirs. The build's own file stays `gpsp_libretro.tns`, upstream's name.
 
 
 Gotchas
@@ -133,6 +140,15 @@ Gotchas
   presses down to a menu below it.
 * `pgrep -f nspire-link` matches a shell loop that mentions it: use
   `pgrep -x`.
+* The PC build can't play commercial games: its interpreter goes wrong
+  within the first second (Advance Wars jumps to 0x910803DE at frame 15 and
+  gpsp-host crashes), with the .gba as much as the .gbz. Check real ROMs'
+  .gbz files page by page with `nspire_gbz.c` instead (all pages equal the
+  ROM), and play-test on the calculator.
+* An old gpSP build wrote `..cfg.tns` (a game's settings with no game open)
+  into its folder; by character order it comes before `_gpSP.tns`. This
+  build never writes it (`save_game_config_file` does nothing here); delete
+  one if it's there.
 
 
 Status on hardware
@@ -163,6 +179,10 @@ History
 * 2026-10-11: loading screen, zipped games, Compress saves (gzipped in-game
   saves, stored states), save manager, `(` `)` slot keys, fast forward
   counter as in PocketSNES, failed loads go back to the file list.
+* 2026-10-11, later: renamed `_gpSP.tns` (first in its folder); file types
+  follow the name. The user's five GBA games went onto the calculator as
+  .zip (61 MB of ROMs in 32 MB; first as .gbz, then zips at the user's
+  wish, like the SNES games), unpacked whole into the 32 MB ROM buffer.
 
 
 Open items and ideas

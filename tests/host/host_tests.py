@@ -501,6 +501,40 @@ def gpsz_unflag(path):
     open(path, "wb").write(data)
 
 
+def test_file_types():
+    """ROMs opened from the documents start gpSP by its name (_gpSP): its
+    earlier name's file types (gpsp_qol, as on the user's calculator) are
+    pointed at it, another program's are left alone, and the file isn't
+    rewritten when nothing changes."""
+    cfg_lines = ["ext.sfc=_PocketSNES", "ext.zip=_PocketSNES", "ext.gba=gpsp_qol",
+                 "ext.gbz=gpsp_qol", "ext.gbc=gbc4nspire", ""]
+    r = Run("file_types")
+    ndless = os.path.join(r.dir, "ndless")
+    os.makedirs(ndless)
+    cfg = os.path.join(ndless, "ndless.cfg.tns")
+    with open(cfg, "w") as f:
+        f.write("\n".join(cfg_lines))
+    r.run("wait 1\nquit\n")
+    expected = [l.replace("gpsp_qol", "_gpSP") for l in cfg_lines]
+    check(open(cfg).read().split("\n") == expected, "file types: gpsp_qol's now _gpSP's: %r" % open(cfg).read())
+    check(r.report["registered"] == "gba=_gpSP,gbz=_gpSP", "file types: registered %s" % r.report["registered"])
+
+    other = Run("file_types_other")
+    os.makedirs(os.path.join(other.dir, "ndless"))
+    cfg = os.path.join(other.dir, "ndless", "ndless.cfg.tns")
+    text = "ext.gba=gpspnspire_gpsp_launcher\r\next.gbz=_gpSP\r\n"
+    with open(cfg, "w", newline="") as f:
+        f.write(text)
+    os.utime(cfg, (1000000000, 1000000000))
+    other.run("wait 1\nquit\n")
+    check(open(cfg, newline="").read() == text, "file types: another program's kept")
+    check(os.stat(cfg).st_mtime == 1000000000, "file types: not rewritten when nothing changes")
+
+    none = Run("file_types_none").run("wait 1\nquit\n")
+    check(not os.path.exists(os.path.join(none.dir, "ndless")), "file types: no ndless folder made")
+    check(none.report["registered"] == "gba=_gpSP,gbz=_gpSP", "file types: registered without a file")
+
+
 def test_states_from_older_builds():
     """Older builds' states and the first QoL build's (as on the user's
     calculator: Emerald's slot 6 from the QoL build, then slots 0 and 1 from
@@ -1154,7 +1188,8 @@ TESTS = [test_play, test_menu, test_menu_slow_game, test_old_settings, test_unsc
          test_brightness, test_states, test_number_keys, test_move_and_sort, test_speed_test,
          test_hotkeys_in_menu_keys, test_folders, test_gbz, test_menu_load_and_exit, test_frameskip,
          test_fps_counter_and_fast_forward, test_blended, test_loading_screen, test_zipped_game,
-         test_slot_keys, test_save_manager, test_every_menu_line, test_states_from_older_builds]
+         test_slot_keys, test_save_manager, test_every_menu_line, test_states_from_older_builds,
+         test_file_types]
 
 
 def main():

@@ -26,6 +26,7 @@ typedef enum
 int touchpad_scan(touchpad_report_t *report);
 int on_key_pressed(void);
 void cfg_register_fileext(const char *ext, const char *prgm);
+const char *get_documents_dir(void);
 int NU_Current_Dir(const char *drive, char *path);
 
 #define is_classic 0

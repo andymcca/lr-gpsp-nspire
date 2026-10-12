@@ -24,12 +24,15 @@ Tag your Ndless SDK image as `ndless-dev:latest` (e.g. from [stepney141/ndless-d
 make
 ```
 
-Output: `gpsp_libretro.tns` (install on the calculator like the legacy gpSP launcher).
+Output: `gpsp_libretro.tns`. Copy it to the calculator as `_gpSP.tns`, in the
+folder with your games: the underscore puts it at the top of the folder, so
+opening the folder and pressing enter starts gpSP.
 
 See [README.txt](README.txt) and [DOCKER_BUILD.md](DOCKER_BUILD.md) for device file layout, RAM flags, and Windows/Docker notes.
 
 ## Device files
 
+- `_gpSP.tns`, the program
 - `gba_bios.bin.tns`
 - ROMs as `.gba.tns`, compressed as `.gbz.tns`, or zipped as `.zip.tns` (see below)
 - `gpsp_qol.cfg.tns` (written by the GUI; older builds wrote `gpsp.cfg.tns`)
@@ -172,7 +175,10 @@ normal (marker file `gpsp_clock.tns`). The speed test's file also records the
 clock register and the backlight value gpSP found.
 
 **Other.** Opening a `.gba.tns` or `.gbz.tns` from the calculator's documents
-starts gpSP (the first gpSP build run registers its own name with Ndless).
+starts gpSP. Ndless finds the program for a file type by its name, so gpSP
+registers the name it was started as; file types that name an earlier gpSP
+(`gpsp_qol`, or any name starting with `gpsp_` or `_gpsp`) are moved to it,
+so renaming it keeps games opening, and another program's are left alone.
 
 **Fixed since the first QoL build** (the one that glitched): the menu could run
 stale code on the calculator. gpSP's menu calls its options' functions through

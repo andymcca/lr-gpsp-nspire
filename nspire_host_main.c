@@ -661,14 +661,89 @@ void nspire_speed_test(void)
 /* ---- Start ---- */
 
 /* ROMs opened from the calculator's documents start this gpSP: Ndless keeps
- * file associations in ndless.cfg.tns and finds the program by its name, so
- * the name gpSP was started as is registered. An existing association is
- * left alone (Ndless's rule), so the first gpSP build run keeps it. */
+ * file associations in ndless.cfg.tns as "ext.gba=<program name without
+ * .tns>" and finds the program by that name, so the name gpSP was started
+ * as is registered. An association naming another program is left alone
+ * (Ndless's rule); one naming a gpSP like this one (a name starting with
+ * gpsp_ or _gpsp, such as gpsp_qol, this build's name before _gpSP) is
+ * pointed at this one, so renaming the program keeps ROMs opening. */
+static const char *const rom_types[] = { "gba", "gbz" };
+#define NUM_ROM_TYPES (sizeof(rom_types) / sizeof(rom_types[0]))
+
+static int gpsp_program_name(const char *value, size_t len)
+{
+  return len >= 5 && (!strncasecmp(value, "gpsp_", 5) || !strncasecmp(value, "_gpsp", 5));
+}
+
+/* The file is short: read it whole, change the lines, write it back. */
+static void retarget_rom_types(const char *name)
+{
+  static char text[8192], out[8192 + 256];
+  char path[600];
+  size_t len, out_len = 0, name_len = strlen(name), i;
+  int changed = 0;
+  char *line;
+  FILE *f;
+
+  snprintf(path, sizeof(path), "%sndless/ndless.cfg.tns", get_documents_dir());
+  f = fopen(path, "rb");
+  if (!f)
+    return;
+  len = fread(text, 1, sizeof(text) - 1, f);
+  if (!feof(f))   /* longer than any ndless.cfg.tns: leave it */
+  {
+    fclose(f);
+    return;
+  }
+  fclose(f);
+  text[len] = 0;
+
+  for (line = text; *line; )
+  {
+    char *end = strchr(line, '\n');
+    size_t line_len = end ? (size_t)(end - line + 1) : strlen(line);
+    const char *value = NULL;
+    size_t value_len;
+
+    for (i = 0; i < NUM_ROM_TYPES; i++)
+    {
+      char key[16];
+      snprintf(key, sizeof(key), "ext.%s=", rom_types[i]);
+      if (!strncmp(line, key, strlen(key)))
+        value = line + strlen(key);
+    }
+    value_len = value ? strcspn(value, "\r\n") : 0;
+    if (value && gpsp_program_name(value, value_len) &&
+        !(value_len == name_len && !strncmp(value, name, name_len)) &&
+        out_len + (size_t)(value - line) + name_len + 1 < sizeof(out))
+    {
+      memcpy(out + out_len, line, value - line);
+      out_len += value - line;
+      memcpy(out + out_len, name, name_len);
+      out_len += name_len;
+      out[out_len++] = '\n';
+      changed = 1;
+    }
+    else if (out_len + line_len < sizeof(out))
+    {
+      memcpy(out + out_len, line, line_len);
+      out_len += line_len;
+    }
+    line += line_len;
+  }
+
+  if (changed && (f = fopen(path, "wb")) != NULL)
+  {
+    fwrite(out, 1, out_len, f);
+    fclose(f);
+  }
+}
+
 static void register_rom_types(const char *exe_path)
 {
   const char *slash = strrchr(exe_path, '/');
   char name[64];
-  size_t len;
+  size_t len, i;
 
   snprintf(name, sizeof(name), "%s", slash ? slash + 1 : exe_path);
   len = strlen(name);
@@ -676,8 +751,10 @@ static void register_rom_types(const char *exe_path)
     name[len - 4] = 0;
   if (!name[0])
     return;
-  cfg_register_fileext("gba", name);
-  cfg_register_fileext("gbz", name);
+  retarget_rom_types(name);
+  /* The types that have no program yet. */
+  for (i = 0; i < NUM_ROM_TYPES; i++)
+    cfg_register_fileext(rom_types[i], name);
 }
 
 int main(int argc, char *argv[])
