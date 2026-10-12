@@ -146,7 +146,9 @@ void nspire_restore()
 	}
 	timer_restore();
 	enableAlignmentExceptions();
-	//refresh_osscr();
+	/* The OS's file list doesn't see files gpSP moves or writes (zgpSP_saves,
+	 * states): without this it kept showing files and folders that were gone. */
+	refresh_osscr();
 }
 
 void set_display_buffer(void* buffer)

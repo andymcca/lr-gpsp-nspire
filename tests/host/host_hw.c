@@ -112,6 +112,8 @@ static long writes_to_shown;
 static double first_writes[5];
 static int first_writes_count;
 static char registered[256];
+static long osscr_refreshes;
+static int osscr_refreshed_lcd_os;   /* the OS's screen was back when it came */
 static char notes[400][300];   /* shot and note lines, in order */
 static int num_notes;
 
@@ -183,6 +185,8 @@ static void write_report(void)
   for (i = 0; i < first_writes_count; i++)
     fprintf(f, "write_to_shown_at %.3f\n", first_writes[i] / TICK_HZ);
   fprintf(f, "registered %s\n", registered[0] ? registered : "-");
+  fprintf(f, "osscr_refreshes %ld\n", osscr_refreshes);
+  fprintf(f, "osscr_refresh_lcd %s\n", osscr_refreshed_lcd_os ? "os" : "gpsp");
   fprintf(f, "backlight_start %u\n", (unsigned)backlight_at_start);
   fprintf(f, "backlight_end %u\n", (unsigned)backlight);
   fprintf(f, "backlight_writes %ld\n", backlight_writes);
@@ -508,6 +512,12 @@ int on_key_pressed(void)
 {
   advance(READ_STEP);
   return on_key;
+}
+
+void refresh_osscr(void)
+{
+  osscr_refreshes++;
+  osscr_refreshed_lcd_os = lcd_base == (uintptr_t)os_buffer;
 }
 
 void cfg_register_fileext(const char *ext, const char *prgm)

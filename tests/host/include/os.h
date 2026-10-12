@@ -28,6 +28,7 @@ int on_key_pressed(void);
 void cfg_register_fileext(const char *ext, const char *prgm);
 const char *get_documents_dir(void);
 int NU_Current_Dir(const char *drive, char *path);
+void refresh_osscr(void);
 
 #define is_classic 0
 #define is_cx2 1

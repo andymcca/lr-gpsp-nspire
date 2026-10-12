@@ -1177,6 +1177,9 @@ quit
     check("quit" not in r.notes, "exit: gpSP closed by itself")
     check(os.path.exists(r.save("Bravo.gba0.svs.tns")), "exit: the game was saved")
     check(r.report["lcd_base_end"] == "os", "exit: the OS's screen back")
+    check(r.report["osscr_refreshes"] == "1" and r.report["osscr_refresh_lcd"] == "os",
+          "exit: the OS's file list refreshed once, after its screen is back (%s %s)"
+          % (r.report["osscr_refreshes"], r.report["osscr_refresh_lcd"]))
 
 
 def test_frameskip():
