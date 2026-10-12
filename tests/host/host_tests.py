@@ -140,10 +140,13 @@ class Shot:
 # ---- Running gpSP ----
 
 class Run:
-    def __init__(self, name, roms=("Pattern",), files=None, reuse=None):
+    def __init__(self, name, roms=("Pattern",), files=None, reuse=None, in_documents=False):
+        """in_documents: gpSP and the games right in My Documents (no gba
+        folder)."""
         self.name = name
+        self.in_documents = reuse.in_documents if reuse else in_documents
         self.dir = os.path.join(WORK, name)
-        self.gba = os.path.join(self.dir, "gba")
+        self.gba = self.dir if self.in_documents else os.path.join(self.dir, "gba")
         self.out = os.path.join(self.dir, "out")
         if reuse is None:
             shutil.rmtree(self.dir, ignore_errors=True)
@@ -170,7 +173,8 @@ class Run:
         path = os.path.join(self.out, "script.txt")
         with open(path, "w") as f:
             f.write(script)
-        args = [HOST, path, self.out, self.gba] + ([rom] if rom else [])
+        args = ([HOST] + (["--documents", self.dir] if self.in_documents else []) +
+                [path, self.out, self.gba] + ([rom] if rom else []))
         result = subprocess.run(args, capture_output=True, text=True, timeout=300)
         self.exit = result.returncode
         self.stderr = result.stderr
@@ -203,8 +207,8 @@ class Run:
         return os.path.join(self.gba, name)
 
     def save(self, name):
-        """A file in the saves folder (My Documents/gpSP_saves)."""
-        return os.path.join(self.dir, "gpSP_saves", name)
+        """A file in the saves folder (My Documents/zgpSP_saves)."""
+        return os.path.join(self.dir, "zgpSP_saves", name)
 
 
 # ---- The tests ----
@@ -326,7 +330,7 @@ quit
             check(words[61] == 3, "qol1_cfg: 432 MHz kept: speed %d" % words[61])
         if name == "old_cfg":
             check(not os.path.exists(r.file("gpsp.cfg.tns")) and os.path.getsize(r.save("gpsp.cfg.tns")) == 148,
-                  "old_cfg: the old build's file moved into gpSP_saves as it was")
+                  "old_cfg: the old build's file moved into zgpSP_saves as it was")
 
 
 def test_unscaled_chosen():
@@ -547,7 +551,7 @@ def test_file_types():
 
 def test_new_calculator():
     """On a calculator that never had gpSP: the first start makes My
-    Documents/gpSP_saves, everything gpSP writes goes there or into the
+    Documents/zgpSP_saves, everything gpSP writes goes there or into the
     program file, and the game folder keeps only the program and games."""
     r = Run("new_calculator", roms=("Pattern", "Second"))
     program = r.file(PROGRAM)
@@ -570,9 +574,11 @@ wait 1
 """)
     check(sorted(os.listdir(r.gba)) == sorted([PROGRAM, "Pattern.gba.tns", "Second.gba.tns"]),
           "new calculator: only the program and games in the game folder: %s" % sorted(os.listdir(r.gba)))
-    saves = sorted(os.listdir(os.path.join(r.dir, "gpSP_saves")))
+    check(sorted(os.listdir(r.dir)) == ["gba", "out", "zgpSP_saves"],
+          "new calculator: My Documents has the saves folder: %s" % sorted(os.listdir(r.dir)))
+    saves = sorted(os.listdir(r.save("")))
     for name in ("gpsp_qol.cfg.tns", "gpsp_romdir.tns", "gpsp_order_gba.txt.tns", "Second.gba0.svs.tns"):
-        check(name in saves, "new calculator: %s in gpSP_saves: %s" % (name, saves))
+        check(name in saves, "new calculator: %s in zgpSP_saves: %s" % (name, saves))
     check(os.path.getsize(program) == bare + 4096 + 16, "new calculator: the settings in the program file (%d -> %d)"
           % (bare, os.path.getsize(program)))
     stored = open(program, "rb").read()[bare:bare + 288]
@@ -590,10 +596,103 @@ wait 1
           % (again.report["backlight_end"], level))
 
 
+def test_no_gba_folder():
+    """gpSP needs no gba folder: right in My Documents with the games next
+    to it, the first start still makes My Documents/zgpSP_saves, and the
+    saves and gpSP's files go there; My Documents keeps the program, the
+    games and that folder."""
+    r = Run("no_gba_folder", roms=("Pattern", "Second"), in_documents=True)
+    bare = os.path.getsize(r.file(PROGRAM))
+    r.run(REAL_COSTS + """wait 1
+shot list
+press 2
+wait 1.5
+note game
+press S
+wait 0.5
+press Q
+wait 1
+""")
+    check(r.notes["game"]["game"] == "Second.gba.tns", "no gba folder: 2 starts Second: %s" % r.notes["game"]["game"])
+    left = sorted(n for n in os.listdir(r.dir) if n != "out")
+    check(left == sorted([PROGRAM, "Pattern.gba.tns", "Second.gba.tns", "zgpSP_saves"]),
+          "no gba folder: My Documents has the program, the games and zgpSP_saves: %s" % left)
+    saves = sorted(os.listdir(r.save(""))) if os.path.isdir(r.save("")) else []
+    for name in ("gpsp_qol.cfg.tns", "gpsp_romdir.tns", "Second.gba0.svs.tns"):
+        check(name in saves, "no gba folder: %s in zgpSP_saves: %s" % (name, saves))
+    check(os.path.getsize(r.file(PROGRAM)) == bare + 4096 + 16, "no gba folder: the settings in the program file")
+    again = Run("no_gba_folder2", reuse=r).run("wait 1\npress 2\nwait 1.5\nnote game\nquit\n")
+    check(again.notes["game"]["frame"] > 90, "no gba folder: Second resumed from its state (frame %d)"
+          % again.notes["game"]["frame"])
+
+
+def test_old_saves_folder():
+    """The calculator as the build before left it (the user's): everything
+    in My Documents/gpSP_saves, the settings in the program, an older
+    build's ..cfg.tns in My Documents. A new _gpSP.tns sent over the old
+    one (no settings inside it yet) moves gpSP_saves into zgpSP_saves and
+    removes it, takes the settings from the copy there, and moves
+    ..cfg.tns in; the order, the brightness and the newest state hold, and
+    another program's file in My Documents stays."""
+    first = Run("old_saves_folder_first", roms=("Alpha", "Bravo")).run(REAL_COSTS + """wait 1
+press down
+press tab
+wait 0.2
+press up
+press enter
+wait 0.3
+press enter
+wait 1.5
+press S
+wait 0.5
+press +
+press +
+wait 0.3
+press Q
+wait 1
+""")
+    r = Run("old_saves_folder", reuse=first)
+    with open(r.save("gpsp_romdir.tns"), "w") as f:   # the last folder: this calculator's gba
+        f.write(r.gba)
+    os.rename(r.save(""), os.path.join(r.dir, "gpSP_saves"))
+    words_file(os.path.join(r.dir, "..cfg.tns"), [0] * 16)
+    with open(os.path.join(r.dir, "notes.txt.tns"), "w") as f:
+        f.write("another program's file")
+    with open(r.file(PROGRAM), "wb") as f:   # the new build, as sent
+        f.write(bytes(range(256)) * 16)
+    level = read_words(os.path.join(r.dir, "gpSP_saves", "gpsp_qol.cfg.tns"))[63]
+    r.run(REAL_COSTS + """wait 1
+note list
+press enter
+wait 1.5
+note game
+press Q
+wait 1
+""")
+    left = sorted(n for n in os.listdir(r.dir) if n != "out")
+    check(left == ["gba", "notes.txt.tns", "zgpSP_saves"],
+          "old saves folder: gpSP_saves and ..cfg.tns gone from My Documents: %s" % left)
+    check(sorted(os.listdir(r.gba)) == sorted([PROGRAM, "Alpha.gba.tns", "Bravo.gba.tns"]),
+          "old saves folder: the game folder has the program and the games: %s" % sorted(os.listdir(r.gba)))
+    for name in ("gpsp_qol.cfg.tns", "gpsp_order_gba.txt.tns", "gpsp_romdir.tns", "Bravo.gba0.svs.tns",
+                 "..cfg.tns"):
+        check(os.path.exists(r.save(name)), "old saves folder: %s in zgpSP_saves" % name)
+    stored = open(r.file(PROGRAM), "rb").read()
+    check(len(stored) == 4096 + 4096 + 16 and stored[4096:4096 + 288] == open(r.save("gpsp_qol.cfg.tns"), "rb").read(),
+          "old saves folder: the settings went into the new program file")
+    # gpSP sets its brightness level at start: (10 - level) * 25 on the register.
+    check(level != 0 and r.notes["list"]["backlight"] == (10 - level) * 25,
+          "old saves folder: the brightness kept (level %d, backlight %d)" % (level, r.notes["list"]["backlight"]))
+    check(r.notes["game"]["game"] == "Bravo.gba.tns", "old saves folder: the list's first game is Bravo: %s"
+          % r.notes["game"]["game"])
+    check(r.notes["game"]["frame"] > 90, "old saves folder: Bravo resumed from its state (frame %d)"
+          % r.notes["game"]["frame"])
+
+
 def test_old_layout():
     """A calculator with files from builds before the saves folder (as the
     user's): states, saves, settings (older builds' too), game order, last
-    folder and BIOS next to the games and gpSP move into gpSP_saves on the
+    folder and BIOS next to the games and gpSP move into zgpSP_saves on the
     first start (a game in another folder when it starts), and nothing is
     lost: the newest state resumes, the settings and the order hold. The
     game folder keeps only the program and the games; another emulator's
@@ -644,7 +743,7 @@ wait 1
           "old layout: only the program, games, folders and another emulator's save stay: %s" % left)
     for name in ("Bravo.gba0.svs.tns", "gpsp_qol.cfg.tns", "gpsp_order_gba.txt.tns", "gpsp.cfg.tns",
                  "Alpha.gba.cfg.tns", "Bravo.cfg.tns", "gba_bios.bin.tns"):
-        check(os.path.exists(r.save(name)), "old layout: %s moved into gpSP_saves" % name)
+        check(os.path.exists(r.save(name)), "old layout: %s moved into zgpSP_saves" % name)
     stored = open(r.file(PROGRAM), "rb").read()
     check(len(stored) == 4096 + 4096 + 16 and stored[4096:4096 + 288] == open(r.save("gpsp_qol.cfg.tns"), "rb").read(),
           "old layout: the settings went into the program file on the first start")
@@ -1413,7 +1512,8 @@ TESTS = [test_play, test_menu, test_menu_slow_game, test_old_settings, test_unsc
          test_hotkeys_in_menu_keys, test_folders, test_gbz, test_menu_load_and_exit, test_frameskip,
          test_fps_counter_and_fast_forward, test_blended, test_loading_screen, test_zipped_game,
          test_slot_keys, test_save_manager, test_every_menu_line, test_states_from_older_builds,
-         test_file_types, test_new_calculator, test_old_layout, test_rom_manager]
+         test_file_types, test_new_calculator, test_no_gba_folder, test_old_layout, test_old_saves_folder,
+         test_rom_manager]
 
 
 def main():

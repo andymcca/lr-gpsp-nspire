@@ -114,13 +114,25 @@ Decisions and why
   quit gpSP.
 * **The newest state** is the one with the highest save counter among this
   build's states, else the latest file time (states from older builds).
-* **Saves in My Documents/gpSP_saves** (`nspire_paths.c`), as PocketSNES has
-  PocketSNES_saves: in-game saves, states, a game's settings, game orders
-  (`gpsp_order_<folder>.txt.tns`), logs, the clock marker, the last folder.
-  Not in the ROM folder, so `_gpSP.tns` stays first there (a folder is listed
-  above every file). Made at every start, so a new calculator gets it. The
-  user asked for it ("saves and states in a new folder ... even on a new
-  calc"). Older files move in at start (gpSP's folder) and when a game
+* **Saves in My Documents/zgpSP_saves** (`nspire_paths.c`), as PocketSNES
+  has zPocketSNES_saves: in-game saves, states, a game's settings, game
+  orders (`gpsp_order_<folder>.txt.tns`), logs, the clock marker, the last
+  folder. Not in the ROM folder, so `_gpSP.tns` stays first there (a folder
+  is listed above every file). Made at every start, from My Documents
+  (`get_documents_dir`), wherever gpSP is: no gba folder needed (host
+  scenario no_gba_folder runs gpSP right in My Documents), so a new
+  calculator gets it. The user asked for it ("saves and states in a new
+  folder ... even on a new calc"; "others may not have a gba folder").
+  The z: the OS lists folders A to Z ignoring case (gbc, ndless,
+  PocketSNES_saves, snes on the user's calculator) above files, and the user
+  wanted the folder "at the bottom". `_PocketSNES` listing first in /snes
+  means '_' sorts before letters, so the OS either lowercases (then '~'
+  would sort last) or puts all symbols first (then '~' would be at the
+  top); a leading z is at the bottom either way. Until 2026-10-11 the
+  folder was gpSP_saves: `nspire_move_old_documents_files` moves its files
+  in at start and removes it once it's empty, and takes gpSP's settings
+  files from My Documents itself (older builds wrote `..cfg.tns` in the
+  folder their list had open; it sorted below every folder). Older files move in at start (gpSP's folder) and when a game
   starts (its folder): the GBA games' saves (names ending .gba, .agb or .bin
   before the suffix, so `Game.gbc.sav.tns` stays), `gpsp_order.txt.tns`, and
   from gpSP's folder its own files, the BIOS and every settings file of
@@ -223,6 +235,9 @@ History
   follow the name. The user's five GBA games went onto the calculator as
   .zip (61 MB of ROMs in 32 MB; first as .gbz, then zips at the user's
   wish, like the SNES games), unpacked whole into the 32 MB ROM buffer.
+* 2026-10-11, night: the saves folder renamed zgpSP_saves (below the game
+  folders in My Documents; PocketSNES's zPocketSNES_saves the same way);
+  gpSP_saves and My Documents' `..cfg.tns` move in at start.
 
 
 Open items and ideas

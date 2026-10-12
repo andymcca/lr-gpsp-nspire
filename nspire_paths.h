@@ -1,5 +1,5 @@
-/* Where gpSP keeps its files, as PocketSNES does: one "gpSP_saves" folder in
- * My Documents holds every game's in-game save, save states and own
+/* Where gpSP keeps its files, as PocketSNES does: one "zgpSP_saves" folder
+ * in My Documents holds every game's in-game save, save states and own
  * settings, and gpSP's own files (a copy of the settings for all games, the
  * file list's last folder and game orders, the speed test's and the detailed
  * counter's logs, the CPU speed's crash marker, the GBA BIOS). gpSP's folder
@@ -7,21 +7,27 @@
  * are also kept inside the program file itself (nspire_selfstore.h), so they
  * go wherever _gpSP.tns goes. The folder isn't in the ROM folder, so
  * _gpSP.tns is the first thing there (a folder is listed above every file).
- * gpSP makes the folder when it starts, so a new calculator gets it too.
+ * The OS lists folders A to Z, ignoring case, so the z puts the saves
+ * folder below the game folders (PocketSNES's is zPocketSNES_saves).
+ * gpSP makes the folder when it starts, wherever it is (no gba folder
+ * needed), so a new calculator gets it too.
  *
- * Earlier builds kept all of these next to the ROMs and next to gpSP:
- * nspire_move_old_files moves them in. */
+ * Earlier builds kept all of these next to the ROMs and next to gpSP, and
+ * the build before this one in My Documents/gpSP_saves: nspire_move_old_files
+ * and nspire_move_old_documents_files move them in. */
 #ifndef NSPIRE_PATHS_H
 #define NSPIRE_PATHS_H
 
 #include <stddef.h>
 
-#define SAVE_FOLDER "gpSP_saves"
+#define SAVE_FOLDER "zgpSP_saves"
+/* The saves folder's name before it got the z. */
+#define OLD_SAVE_FOLDER "gpSP_saves"
 
 /* The program file gpSP runs from (argv[0]); "" when unknown. */
 extern char nspire_program_path[512];
 
-/* "<My Documents>/gpSP_saves/<name>" (the folder itself for name ""). */
+/* "<My Documents>/zgpSP_saves/<name>" (the folder itself for name ""). */
 void nspire_save_file(char *out, size_t size, const char *name);
 /* Makes the saves folder if it isn't there. */
 void nspire_save_dir_make(void);
@@ -50,5 +56,12 @@ void nspire_move_game_files(const char *from_base, const char *to_base);
  * the saves folder already has wins: the old one stays where it is. Cheap
  * when there's nothing to move. */
 void nspire_move_old_files(const char *dir, int with_program_files);
+
+/* Moves into the saves folder what earlier builds left in My Documents:
+ * all of My Documents/gpSP_saves (the saves folder's name before; it goes
+ * once it's empty: a file the saves folder already has wins and stays
+ * there) and gpSP's settings files in My Documents itself (older builds
+ * wrote "..cfg.tns" in whatever folder their file list had open). */
+void nspire_move_old_documents_files(void);
 
 #endif

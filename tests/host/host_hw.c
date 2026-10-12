@@ -2,12 +2,13 @@
  * the LCD controller, the 32768 Hz timer, the keypad and touchpad and the
  * backlight, driven by a script of key presses in virtual time.
  *
- *   gpsp-host SCRIPT OUTDIR GAMEDIR [ROM]
+ *   gpsp-host [--documents DIR] SCRIPT OUTDIR GAMEDIR [ROM]
  *
  * gpSP runs as it does on the calculator (its main(), menus, file list and
  * game loop), as GAMEDIR/_gpSP.tns, with GAMEDIR's parent folder as the
  * calculator's documents (its ndless/ndless.cfg.tns has the file types
- * Ndless opens with each program). Virtual time moves a little at every
+ * Ndless opens with each program), or DIR (GAMEDIR itself for gpSP right
+ * in My Documents). Virtual time moves a little at every
  * read of the timer, the keypad or the LCD, so gpSP's waits pass time and
  * its frames come at its own pace. Work that takes time on the calculator
  * but none here (running a frame of the game, drawing a line, turning a
@@ -645,11 +646,18 @@ static void timed_out(int sig)
 int main(int argc, char *argv[])
 {
   static char exe[600];
+  const char *documents = NULL;
   char *args[3];
 
+  if (argc > 2 && !strcmp(argv[1], "--documents"))
+  {
+    documents = argv[2];
+    argv += 2;
+    argc -= 2;
+  }
   if (argc < 4)
   {
-    fprintf(stderr, "usage: gpsp-host SCRIPT OUTDIR GAMEDIR [ROM]\n");
+    fprintf(stderr, "usage: gpsp-host [--documents DIR] SCRIPT OUTDIR GAMEDIR [ROM]\n");
     return 2;
   }
   read_script(argv[1]);
@@ -665,10 +673,25 @@ int main(int argc, char *argv[])
   }
   if (!getcwd(exe, sizeof(exe) - 20))
     return 2;
-  /* The documents: the game folder's parent, with a slash, as Ndless gives it. */
-  snprintf(documents_dir, sizeof(documents_dir), "%s", exe);
-  if (strrchr(documents_dir, '/'))
-    strrchr(documents_dir, '/')[1] = 0;
+  /* The documents: the game folder's parent (or DIR), with a slash, as
+   * Ndless gives it. */
+  if (documents)
+  {
+    static char full[4096];   /* realpath needs PATH_MAX */
+    if (!realpath(documents, full) || strlen(full) + 2 > sizeof(documents_dir))
+    {
+      fprintf(stderr, "gpsp-host: no folder %s\n", documents);
+      return 2;
+    }
+    strcpy(documents_dir, full);
+    strcat(documents_dir, "/");
+  }
+  else
+  {
+    snprintf(documents_dir, sizeof(documents_dir), "%s", exe);
+    if (strrchr(documents_dir, '/'))
+      strrchr(documents_dir, '/')[1] = 0;
+  }
   strcat(exe, "/_gpSP.tns");
   args[0] = exe;
   args[1] = argc > 4 ? argv[4] : NULL;

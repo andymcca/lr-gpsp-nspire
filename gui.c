@@ -2379,7 +2379,7 @@ u32 menu(u16 *original_screen)
     string_selection_option(NULL, "GBA BIOS source", bios_source_options,
      &nspire_bios_choice, 2,
      "Built-in: the open BIOS in gpSP. File: the\n"
-     "official gba_bios.bin.tns, in gpSP_saves.\n"
+     "official gba_bios.bin.tns, in zgpSP_saves.\n"
      "Applies when a game is loaded or restarted.", 3),
     string_selection_option(NULL, "No sprite limit", nspire_sprlim_options,
      &nspire_sprlim_choice, 2,

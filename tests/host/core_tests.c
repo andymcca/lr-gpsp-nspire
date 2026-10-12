@@ -51,7 +51,7 @@ static void path_in_dir(char *out, const char *name)
   snprintf(out, 600, "%s/%s", dir, name);
 }
 
-/* A file in the saves folder (DIR/gpSP_saves: DIR is the documents here). */
+/* A file in the saves folder (DIR/zgpSP_saves: DIR is the documents here). */
 static void path_in_saves(char *out, const char *name)
 {
   nspire_save_file(out, 600, name);
@@ -80,6 +80,12 @@ static long file_size(const char *path)
 {
   struct stat st;
   return stat(path, &st) == 0 ? (long)st.st_size : -1;
+}
+
+static int dir_exists(const char *path)
+{
+  struct stat st;
+  return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
 static int load_rom(const char *name)
@@ -191,7 +197,7 @@ static void test_game_base(void)
   CHECK(!strcmp(out, "game"), "%s", out);
   /* The files go in the saves folder; earlier builds had them by the ROM. */
   nspire_game_base("/documents/gba/Pokemon.gbz.tns", out, sizeof(out));
-  snprintf(want, sizeof(want), "%s/gpSP_saves/Pokemon.gba", dir);
+  snprintf(want, sizeof(want), "%s/zgpSP_saves/Pokemon.gba", dir);
   CHECK(!strcmp(out, want), "%s", out);
   nspire_game_old_base("/documents/gba/Pokemon.gbz.tns", out, sizeof(out));
   CHECK(!strcmp(out, "/documents/gba/Pokemon.gba"), "%s", out);
@@ -680,6 +686,73 @@ static void test_paths(void)
       remove(path);
     }
     rmdir(old);
+  }
+
+  /* The saves folder is My Documents/zgpSP_saves (the z lists it below the
+   * game folders). The one before it, gpSP_saves, moves in whole and goes;
+   * gpSP's settings files in My Documents itself move in, others' stay. */
+  {
+    static const char *const moved[] = { "Game.gba.sav.gz.tns", "Game.gba14.svs.tns", "gpsp_qol.cfg.tns",
+                                         "gpsp_order_gba.txt.tns", "gpsp_romdir.tns", "gba_bios.bin.tns" };
+    static const char *const from_docs[] = { "..cfg.tns", "gpsp.cfg.tns", "Root.gba.cfg.tns" };
+    static const char *const stay[] = { "notes.txt.tns", "Other.cfg.tns", "Game.gbc.sav.tns" };
+    char old_dir[700];
+
+    path_in_saves(path, "");
+    snprintf(want, sizeof(want), "%s/zgpSP_saves", dir);
+    CHECK(!strcmp(path, want), "the saves folder: %s", path);
+
+    snprintf(old_dir, sizeof(old_dir), "%s/gpSP_saves", dir);
+    mkdir(old_dir, 0755);
+    for (i = 0; i < 6; i++)
+    {
+      snprintf(path, sizeof(path), "%s/%s", old_dir, moved[i]);
+      write_text(path, moved[i]);
+    }
+    snprintf(path, sizeof(path), "%s/Keep.gba.sav.tns", old_dir);
+    write_text(path, "old");
+    path_in_saves(saved, "Keep.gba.sav.tns");
+    write_text(saved, "new");
+    for (i = 0; i < 3; i++)
+    {
+      path_in_dir(path, from_docs[i]);
+      write_text(path, from_docs[i]);
+      path_in_dir(path, stay[i]);
+      write_text(path, stay[i]);
+    }
+
+    nspire_move_old_documents_files();
+    for (i = 0; i < 6; i++)
+    {
+      snprintf(path, sizeof(path), "%s/%s", old_dir, moved[i]);
+      path_in_saves(saved, moved[i]);
+      CHECK(file_size(path) < 0 && file_is(saved, moved[i]), "%s moved in from gpSP_saves", moved[i]);
+      remove(saved);
+    }
+    snprintf(path, sizeof(path), "%s/Keep.gba.sav.tns", old_dir);
+    path_in_saves(saved, "Keep.gba.sav.tns");
+    CHECK(file_is(path, "old") && file_is(saved, "new"), "gpSP_saves: one the saves folder has already stays");
+    CHECK(dir_exists(old_dir), "gpSP_saves stays while a file is left in it");
+    for (i = 0; i < 3; i++)
+    {
+      path_in_dir(path, from_docs[i]);
+      path_in_saves(saved, from_docs[i]);
+      CHECK(file_size(path) < 0 && file_is(saved, from_docs[i]), "%s moved in from My Documents", from_docs[i]);
+      remove(saved);
+      path_in_dir(path, stay[i]);
+      CHECK(file_is(path, stay[i]), "%s stays in My Documents", stay[i]);
+      remove(path);
+    }
+
+    snprintf(path, sizeof(path), "%s/Keep.gba.sav.tns", old_dir);
+    remove(path);
+    remove(saved);
+    nspire_move_old_documents_files();
+    CHECK(!dir_exists(old_dir), "gpSP_saves goes when it's empty");
+    path_in_saves(path, "");
+    CHECK(dir_exists(path), "the saves folder is there");
+    nspire_move_old_documents_files();   /* nothing to do: nothing changes */
+    CHECK(!dir_exists(old_dir) && dir_exists(path), "a second start changes nothing");
   }
 
   /* A game's files under another name (a zip's ROM named game.bin). */

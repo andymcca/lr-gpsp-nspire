@@ -788,11 +788,13 @@ int main(int argc, char *argv[])
 
   ChangeWorkingDirectory(argv[0]);
   getcwd(main_path, sizeof(main_path));
-  /* The saves folder, made on the first start (also on a new calculator),
-   * and what earlier builds left next to gpSP moved in, before the
-   * settings are read (nspire_paths.h). */
+  /* The saves folder, made on the first start (also on a new calculator,
+   * wherever gpSP is), and what earlier builds left in My Documents
+   * (gpSP_saves) and next to gpSP moved in, before the settings are read
+   * (nspire_paths.h). */
   snprintf(nspire_program_path, sizeof(nspire_program_path), "%s", argv[0]);
   nspire_save_dir_make();
+  nspire_move_old_documents_files();
   nspire_move_old_files(main_path, 1);
   keys_set_defaults(key_bindings);
   /* Settings found elsewhere (the saves folder's copy, an older build's

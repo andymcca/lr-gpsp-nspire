@@ -10,6 +10,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 char nspire_program_path[512];
 
@@ -311,4 +312,51 @@ void nspire_move_old_files(const char *folder, int with_program_files)
     move_file(from, to);
   }
   free_names(names, count);
+}
+
+static int is_any_file(const char *name, const void *arg)
+{
+  (void)arg;
+  return strcmp(name, ".") && strcmp(name, "..");
+}
+
+static int is_documents_settings_file(const char *name, const void *arg)
+{
+  return is_settings_file((const char *)arg, name);
+}
+
+/* Each name in from_dir moved to the same name in the saves folder. */
+static void move_names_in(const char *from_dir, char **names, unsigned count)
+{
+  char from[1100], to[1100];
+  unsigned i;
+
+  if (count)
+    nspire_save_dir_make();
+  for (i = 0; i < count; i++)
+  {
+    snprintf(from, sizeof(from), "%s%s%s", from_dir, !strcmp(from_dir, "/") ? "" : "/", names[i]);
+    nspire_save_file(to, sizeof(to), names[i]);
+    move_file(from, to);
+  }
+  free_names(names, count);
+}
+
+void nspire_move_old_documents_files(void)
+{
+  char docs[600], old_dir[700];
+  char **names;
+  unsigned count;
+  struct stat st;
+
+  nspire_normalize_path(docs, sizeof(docs), get_documents_dir());
+  snprintf(old_dir, sizeof(old_dir), "%s%s%s", docs, !strcmp(docs, "/") ? "" : "/", OLD_SAVE_FOLDER);
+  if (stat(old_dir, &st) == 0)
+  {
+    names = folder_names(old_dir, is_any_file, NULL, &count);
+    move_names_in(old_dir, names, count);
+    rmdir(old_dir);   /* only goes if everything moved */
+  }
+  names = folder_names(docs, is_documents_settings_file, docs, &count);
+  move_names_in(docs, names, count);
 }
