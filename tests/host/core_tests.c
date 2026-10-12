@@ -14,6 +14,8 @@
 #include "nspire_states.h"
 #include "nspire_zip.h"
 #include "nspire_frontend.h"
+#include "nspire_paths.h"
+#include "nspire_rom_convert.h"
 
 #include <utime.h>
 
@@ -42,9 +44,17 @@ static char dir[512];
     }                                                         \
   } while (0)
 
+extern char unit_documents_dir[600];
+
 static void path_in_dir(char *out, const char *name)
 {
   snprintf(out, 600, "%s/%s", dir, name);
+}
+
+/* A file in the saves folder (DIR/gpSP_saves: DIR is the documents here). */
+static void path_in_saves(char *out, const char *name)
+{
+  nspire_save_file(out, 600, name);
 }
 
 static u8 *read_file(const char *path, long *size)
@@ -170,15 +180,21 @@ static void test_gbz_runs(void)
 
 static void test_game_base(void)
 {
-  char out[512];
-  nspire_game_base("/documents/gba/Pokemon.gba.tns", out, sizeof(out));
-  CHECK(!strcmp(out, "/documents/gba/Pokemon.gba"), "%s", out);
-  nspire_game_base("/documents/gba/Pokemon.gbz.tns", out, sizeof(out));
-  CHECK(!strcmp(out, "/documents/gba/Pokemon.gba"), "%s", out);
-  nspire_game_base("Zelda.GBZ.tns", out, sizeof(out));
+  char out[512], want[600];
+  nspire_game_name("/documents/gba/Pokemon.gba.tns", out, sizeof(out));
+  CHECK(!strcmp(out, "Pokemon.gba"), "%s", out);
+  nspire_game_name("/documents/gba/Pokemon.gbz.tns", out, sizeof(out));
+  CHECK(!strcmp(out, "Pokemon.gba"), "%s", out);
+  nspire_game_name("Zelda.GBZ.tns", out, sizeof(out));
   CHECK(!strcmp(out, "Zelda.gba"), "%s", out);
-  nspire_game_base("/a.b/game", out, sizeof(out));
-  CHECK(!strcmp(out, "/a.b/game"), "%s", out);
+  nspire_game_name("/a.b/game", out, sizeof(out));
+  CHECK(!strcmp(out, "game"), "%s", out);
+  /* The files go in the saves folder; earlier builds had them by the ROM. */
+  nspire_game_base("/documents/gba/Pokemon.gbz.tns", out, sizeof(out));
+  snprintf(want, sizeof(want), "%s/gpSP_saves/Pokemon.gba", dir);
+  CHECK(!strcmp(out, want), "%s", out);
+  nspire_game_old_base("/documents/gba/Pokemon.gbz.tns", out, sizeof(out));
+  CHECK(!strcmp(out, "/documents/gba/Pokemon.gba"), "%s", out);
 }
 
 static void remove_states(void)
@@ -400,8 +416,8 @@ static void test_backup(void)
 
     memcpy(gamepak_backup, saved, 0x8000);
     backup_type = BACKUP_SRAM;
-    path_in_dir(plain, "sram.gba.sav.tns");
-    path_in_dir(gz, "sram.gba.sav.gz.tns");
+    path_in_saves(plain, "sram.gba.sav.tns");
+    path_in_saves(gz, "sram.gba.sav.gz.tns");
     remove(plain);
     remove(gz);
     nspire_compress_saves = 1;
@@ -508,7 +524,7 @@ static void test_zip(void)
   /* Its saves are the unzipped ROM's. */
   path_in_dir(path, "arm.zip.tns");
   nspire_game_base(path, name, sizeof(name));
-  path_in_dir(rom, "arm.gba");
+  path_in_saves(rom, "arm.gba");
   CHECK(!strcmp(name, rom), "zip base name %s", name);
   path_in_dir(rom, "arm.gba.tns");
   states_open_game(rom);
@@ -535,6 +551,278 @@ static void test_zip(void)
   free(raw);
 }
 
+/* ---- Where files go (nspire_paths.c) ---- */
+
+static void write_text(const char *path, const char *text)
+{
+  FILE *f = fopen(path, "wb");
+  if (f)
+  {
+    fputs(text, f);
+    fclose(f);
+  }
+}
+
+static int file_is(const char *path, const char *text)
+{
+  long size;
+  u8 *data = read_file(path, &size);
+  int same = data && size == (long)strlen(text) && !memcmp(data, text, size);
+  free(data);
+  return same;
+}
+
+static void copy_file(const char *from, const char *to)
+{
+  long size;
+  u8 *data = read_file(from, &size);
+  FILE *f = fopen(to, "wb");
+  if (data && f)
+    fwrite(data, 1, size, f);
+  if (f)
+    fclose(f);
+  free(data);
+}
+
+static void test_paths(void)
+{
+  char path[1300], want[1300], old[600], saved[1300];
+  unsigned i;
+
+  /* The OS's form of the current folder, joined with a name as gpSP does. */
+  nspire_normalize_path(path, sizeof(path), "\\documents\\gba\\/Pokemon.zip.tns");
+  CHECK(!strcmp(path, "/documents/gba/Pokemon.zip.tns"), "normalized: %s", path);
+  nspire_normalize_path(path, sizeof(path), "\\documents\\gba\\");
+  CHECK(!strcmp(path, "/documents/gba"), "normalized folder: %s", path);
+  nspire_normalize_path(path, sizeof(path), "/");
+  CHECK(!strcmp(path, "/"), "normalized root: %s", path);
+
+  /* Game orders: one file per ROM folder, named after the folder. */
+  snprintf(old, sizeof(old), "%s/gba", dir);
+  nspire_order_file(path, sizeof(path), old);
+  path_in_saves(want, "gpsp_order_gba.txt.tns");
+  CHECK(!strcmp(path, want), "order file %s", path);
+  snprintf(old, sizeof(old), "%s/gba/rpg/", dir);
+  nspire_order_file(path, sizeof(path), old);
+  path_in_saves(want, "gpsp_order_gba_rpg.txt.tns");
+  CHECK(!strcmp(path, want), "order file %s", path);
+  nspire_order_file(path, sizeof(path), dir);
+  path_in_saves(want, "gpsp_order.txt.tns");
+  CHECK(!strcmp(path, want), "documents' order file %s", path);
+  nspire_order_file(path, sizeof(path), "\\documents\\gba\\");
+  path_in_saves(want, "gpsp_order_gba.txt.tns");
+  CHECK(!strcmp(path, want), "the OS's form of the folder: %s", path);
+
+  /* What earlier builds left in a ROM folder moves in; other emulators'
+   * saves, ROMs and other programs' files stay. From gpSP's own folder,
+   * its settings files (older builds' too), last folder and BIOS move in. */
+  {
+    static const char *const moved[] = { "Game.gba.sav.tns", "Game.gba.sav.gz.tns", "Game.gba3.svs.tns",
+                                         "Game.gba.settings.tns", "Zip.agb12.svs.tns" };
+    static const char *const program[] = { "gpsp_qol.cfg.tns", "gpsp.cfg.tns", "Game.gba.cfg.tns",
+                                           "Game.cfg.tns", "..cfg.tns", "gba_bios.bin.tns", "gpsp_romdir.tns" };
+    static const char *const stay[] = { "Other.gbc.sav.tns", "Game.gba.tns", "notes.txt.tns", "ndless.cfg.tns",
+                                        "Other.cfg.tns" };
+    static const char *const *const lists[] = { moved, program, stay };
+    static const unsigned sizes[] = { 5, 7, 5 };
+    unsigned l;
+
+    snprintf(old, sizeof(old), "%s/oldgba", dir);
+    mkdir(old, 0755);
+    for (l = 0; l < 3; l++)
+      for (i = 0; i < sizes[l]; i++)
+      {
+        snprintf(path, sizeof(path), "%s/%s", old, lists[l][i]);
+        write_text(path, lists[l][i]);
+      }
+    snprintf(path, sizeof(path), "%s/gpsp_order.txt.tns", old);
+    write_text(path, "B.gba.tns\nA.gba.tns\n");
+    /* One the saves folder has already wins. */
+    snprintf(path, sizeof(path), "%s/Keep.gba.sav.tns", old);
+    write_text(path, "old");
+    path_in_saves(saved, "Keep.gba.sav.tns");
+    write_text(saved, "new");
+
+    nspire_move_old_files(old, 0);
+    for (i = 0; i < sizes[0]; i++)
+    {
+      snprintf(path, sizeof(path), "%s/%s", old, moved[i]);
+      path_in_saves(saved, moved[i]);
+      CHECK(file_size(path) < 0 && file_is(saved, moved[i]), "%s moved in", moved[i]);
+      remove(saved);
+    }
+    for (i = 0; i < sizes[1]; i++)
+    {
+      snprintf(path, sizeof(path), "%s/%s", old, program[i]);
+      CHECK(file_is(path, program[i]), "%s moves only from gpSP's folder", program[i]);
+    }
+    path_in_saves(saved, "gpsp_order_oldgba.txt.tns");
+    CHECK(file_is(saved, "B.gba.tns\nA.gba.tns\n"), "the folder's game order moved in");
+    remove(saved);
+    snprintf(path, sizeof(path), "%s/Keep.gba.sav.tns", old);
+    path_in_saves(saved, "Keep.gba.sav.tns");
+    CHECK(file_is(path, "old") && file_is(saved, "new"), "a save the folder has already isn't replaced");
+    remove(path);
+    remove(saved);
+
+    nspire_move_old_files(old, 1);
+    for (i = 0; i < sizes[1]; i++)
+    {
+      snprintf(path, sizeof(path), "%s/%s", old, program[i]);
+      path_in_saves(saved, program[i]);
+      CHECK(file_size(path) < 0 && file_is(saved, program[i]), "%s moved in from gpSP's folder", program[i]);
+      remove(saved);
+    }
+    for (i = 0; i < sizes[2]; i++)
+    {
+      snprintf(path, sizeof(path), "%s/%s", old, stay[i]);
+      CHECK(file_is(path, stay[i]), "%s stays", stay[i]);
+      remove(path);
+    }
+    rmdir(old);
+  }
+
+  /* A game's files under another name (a zip's ROM named game.bin). */
+  path_in_saves(path, "game.bin.sav.tns");
+  write_text(path, "sram");
+  path_in_saves(path, "game.bin7.svs.tns");
+  write_text(path, "state");
+  path_in_saves(old, "game.bin");
+  path_in_saves(want, "game.gba");
+  nspire_move_game_files(old, want);
+  path_in_saves(path, "game.gba.sav.tns");
+  path_in_saves(saved, "game.gba7.svs.tns");
+  CHECK(file_is(path, "sram") && file_is(saved, "state"), "a game's files renamed");
+  remove(path);
+  remove(saved);
+}
+
+/* ---- Compressing and uncompressing ROMs (nspire_rom_convert.c) ---- */
+
+static unsigned long progress_last, progress_total;
+static int progress_backwards;
+
+static void note_progress(unsigned long done, unsigned long total)
+{
+  if (done < progress_last)
+    progress_backwards = 1;
+  progress_last = done;
+  progress_total = total;
+}
+
+/* Whether path unpacks (zip) or reads (plain) to the bytes of want. */
+static int rom_is(const char *path, const char *want)
+{
+  long size, want_size;
+  u8 *expected = read_file(want, &want_size), *got = NULL;
+  int same = 0;
+
+  if (zip_is_zip(path))
+  {
+    zip_rom *z = zip_open(path);
+    if (z && expected && zip_size(z) == (u32)want_size)
+    {
+      got = (u8 *)malloc(want_size);
+      same = got && !zip_read(z, got, (u32)want_size) && !zip_check(z) && !memcmp(got, expected, want_size);
+    }
+    zip_close(z);
+  }
+  else
+  {
+    got = read_file(path, &size);
+    same = got && expected && size == want_size && !memcmp(got, expected, size);
+  }
+  free(expected);
+  free(got);
+  return same;
+}
+
+static void test_rom_convert(void)
+{
+  char conv[600], arm[600], gbz[600], path[1300], out[1300], name[256], saved[1300];
+  const char *why;
+
+  path_in_dir(arm, "arm.gba.tns");
+  path_in_dir(gbz, "arm.gbz.tns");
+  snprintf(conv, sizeof(conv), "%s/conv", dir);
+  mkdir(conv, 0755);
+
+  /* .gba -> .zip -> .gba */
+  snprintf(path, sizeof(path), "%s/Arm.gba.tns", conv);
+  copy_file(arm, path);
+  CHECK(rom_kind(path) == ROM_PLAIN, "a plain ROM");
+  progress_last = progress_total = 0;
+  progress_backwards = 0;
+  why = rom_compress(path, out, sizeof(out), note_progress);
+  CHECK(!why, "compress: %s", why);
+  snprintf(saved, sizeof(saved), "%s/Arm.zip.tns", conv);
+  CHECK(!strcmp(out, saved) && file_size(path) < 0, "compress: %s made, the .gba gone", out);
+  CHECK(rom_kind(out) == ROM_ZIP && zip_rom_name(out, name, sizeof(name)) && !strcmp(name, "Arm.gba"),
+        "compress: Arm.gba in it: %s", name);
+  CHECK(rom_is(out, arm), "compress: the zip unpacks to the ROM");
+  CHECK(file_size(out) < file_size(arm), "compress: smaller (%ld of %ld)", file_size(out), file_size(arm));
+  CHECK(!progress_backwards && progress_total == 2ul * file_size(arm) && progress_last == progress_total,
+        "compress: progress to the end (%lu of %lu)", progress_last, progress_total);
+  CHECK(rom_compress(out, path, sizeof(path), NULL) != NULL, "compress: a zip isn't compressed again");
+
+  why = rom_uncompress(saved, out, sizeof(out), NULL);
+  snprintf(path, sizeof(path), "%s/Arm.gba.tns", conv);
+  CHECK(!why && !strcmp(out, path) && file_size(saved) < 0, "uncompress: %s", why ? why : out);
+  CHECK(rom_is(path, arm), "uncompress: the ROM as it was");
+  CHECK(rom_uncompress(path, out, sizeof(out), NULL) != NULL, "uncompress: a .gba isn't");
+  remove(path);
+
+  /* .gbz both ways */
+  snprintf(path, sizeof(path), "%s/Packed.gbz.tns", conv);
+  copy_file(gbz, path);
+  why = rom_uncompress(path, out, sizeof(out), NULL);
+  snprintf(saved, sizeof(saved), "%s/Packed.gba.tns", conv);
+  CHECK(!why && !strcmp(out, saved) && rom_is(out, arm) && file_size(path) < 0, "gbz -> gba: %s", why);
+  remove(saved);
+  copy_file(gbz, path);
+  why = rom_compress(path, out, sizeof(out), NULL);
+  snprintf(saved, sizeof(saved), "%s/Packed.zip.tns", conv);
+  CHECK(!why && !strcmp(out, saved) && rom_is(out, arm) && file_size(path) < 0, "gbz -> zip: %s", why);
+  remove(saved);
+
+  /* A file with the new name already there: nothing changes. */
+  snprintf(path, sizeof(path), "%s/Dup.gba.tns", conv);
+  copy_file(arm, path);
+  snprintf(saved, sizeof(saved), "%s/Dup.zip.tns", conv);
+  write_text(saved, "mine");
+  CHECK(rom_compress(path, out, sizeof(out), NULL) != NULL && rom_is(path, arm) && file_is(saved, "mine"),
+        "the .zip there already: nothing changed");
+  remove(path);
+  remove(saved);
+
+  /* A zip whose ROM isn't a .gba: the .gba gets the zip's ROM's name, and
+   * its saves follow. */
+  snprintf(path, sizeof(path), "%s/NoGba.zip.tns", conv);
+  path_in_dir(saved, "nogba.zip.tns");
+  copy_file(saved, path);
+  path_in_saves(saved, "game.bin.sav.tns");
+  write_text(saved, "sram");
+  why = rom_uncompress(path, out, sizeof(out), NULL);
+  snprintf(saved, sizeof(saved), "%s/game.gba.tns", conv);
+  CHECK(!why && !strcmp(out, saved) && rom_is(out, arm), "a zip's game.bin: %s", why ? why : out);
+  path_in_saves(saved, "game.gba.sav.tns");
+  CHECK(file_is(saved, "sram"), "a zip's game.bin: its save follows");
+  remove(saved);
+  remove(out);
+
+  /* A damaged zip: refused, nothing left behind. */
+  snprintf(path, sizeof(path), "%s/Bad.zip.tns", conv);
+  path_in_dir(saved, "bad.zip.tns");
+  copy_file(saved, path);
+  why = rom_uncompress(path, out, sizeof(out), NULL);
+  snprintf(saved, sizeof(saved), "%s/arm.gba.tns", conv);
+  CHECK(why && file_size(path) > 0 && file_size(saved) < 0, "a damaged zip: %s", why ? why : "uncompressed!");
+  snprintf(saved, sizeof(saved), "%s/arm.gba.tns.tmp", conv);
+  CHECK(file_size(saved) < 0, "a damaged zip: no temporary file left");
+  remove(path);
+  rmdir(conv);
+}
+
 int main(int argc, char **argv)
 {
   if (argc < 2)
@@ -543,6 +831,8 @@ int main(int argc, char **argv)
     return 2;
   }
   snprintf(dir, sizeof(dir), "%s", argv[1]);
+  snprintf(unit_documents_dir, sizeof(unit_documents_dir), "%s/", dir);
+  nspire_save_dir_make();
 
   nspire_rom_buffer_size_choice = 2;
   init_gamepak_buffer();
@@ -560,6 +850,10 @@ int main(int argc, char **argv)
   test_states();
   printf("in-game saves\n");
   test_backup();
+  printf("where files go\n");
+  test_paths();
+  printf("compressing ROMs\n");
+  test_rom_convert();
   printf("zipped ROMs\n");
   test_zip();   /* last: the big zip grows the ROM buffer */
 

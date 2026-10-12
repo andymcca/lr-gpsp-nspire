@@ -32,14 +32,25 @@ See [README.txt](README.txt) and [DOCKER_BUILD.md](DOCKER_BUILD.md) for device f
 
 ## Device files
 
-- `_gpSP.tns`, the program
-- `gba_bios.bin.tns`
-- ROMs as `.gba.tns`, compressed as `.gbz.tns`, or zipped as `.zip.tns` (see below)
-- `gpsp_qol.cfg.tns` (written by the GUI; older builds wrote `gpsp.cfg.tns`)
-- next to a ROM: its in-game save (`Game.gba.sav.tns`, or gzipped
-  `Game.gba.sav.gz.tns`), save states
-  (`Game.gba0.svs.tns`...), own settings (`Game.gba.settings.tns`), and the
-  folder's game order (`gpsp_order.txt.tns`)
+    My Documents/
+      gba/
+        _gpSP.tns                    the program, first in the folder; the settings
+                                     for all games are kept inside it
+        Game.gba.tns                 ROMs, or zipped (Game.zip.tns), or .gbz.tns
+      gpSP_saves/                    made on the first start
+        gba_bios.bin.tns             the GBA BIOS (optional; one put next to gpSP moves here)
+        Game.gba.sav.tns / .sav.gz.tns   in-game saves, plain or gzipped
+        Game.gba0.svs.tns ...        save states, slots 0 to 999
+        Game.gba.settings.tns        a game's own settings and keys
+        gpsp_qol.cfg.tns             a copy of the settings for all games
+        gpsp_order_gba.txt.tns       the gba folder's game order
+        gpsp_romdir.tns, gpsp_results.txt.tns, gpsp_perf.txt.tns, gpsp_clock.tns
+
+The game folder has only the program and the games. Builds before the
+saves folder kept these next to the ROMs and next to gpSP: the first start
+moves them into `gpSP_saves` (a game in another folder, when it starts),
+with the BIOS and older gpSP builds' settings files (`gpsp.cfg.tns`,
+`Game.gba.cfg.tns`, `Game.cfg.tns`). Other programs' files stay.
 
 ## What this build adds (TI-Nspire QoL, 2026-10)
 
@@ -84,12 +95,12 @@ darkest.)
 press it (**1**-**9**, **0**) to start that game; with **shift** held it
 starts without loading its state, like **shift+enter**. **tab** picks a game
 up to move it: up/down move it, **enter** puts it there, **esc** puts it back.
-The folder keeps that order (in `gpsp_order.txt.tns`); **shift+tab** sorts it
+The folder keeps that order (in `gpSP_saves`); **shift+tab** sorts it
 A to Z again. A folder opens on its first game, and gpSP opens in the folder
 it was last in.
 
-**Save states.** Slots 0 to 999, named as before (`Game.gba12.svs.tns` next to
-the ROM), so older states still load. In *Cheats and Miscellaneous options*:
+**Save states.** Slots 0 to 999, named as before (`Game.gba12.svs.tns`, in
+`gpSP_saves`), so older states still load. In *Cheats and Miscellaneous options*:
 
 | Setting | Default | |
 |---|---|---|
@@ -119,6 +130,15 @@ compresses and **U** uncompresses the marked ones (or the one picked), and
 **del** deletes them after asking (**del** again). A state keeps its place
 among the newest when it's compressed or uncompressed. A deleted in-game
 save comes back if the game saves again while it's open.
+
+**ROM manager** (main menu): the games in the folder (the running game's,
+or the file list's), their sizes, zipped or not. **enter** marks games
+(**A**: all of them), **C** compresses the marked ones (or the one picked)
+into `.zip.tns` files, as zip tools make them, and **U** uncompresses them
+into `.gba.tns` files (a `.gbz` goes either way). The new file is read back
+and checked before the old one is deleted, the game order follows, and
+saves keep working (they go by the ROM's name). The game that's running can
+be done too while its whole ROM is in memory (the ROM buffer setting).
 
 **Zipped games.** A zip from the internet renamed to `Game.zip.tns` plays
 like the ROM in it (the first `.gba` or `.agb` file, else the biggest); its
@@ -155,11 +175,15 @@ unless bound to something. esc goes back in menus, and held arrows repeat.
 
 **Per game.** *Settings for* (Emulator options) and *Keys for* (Configure input)
 can be "this game only": the game keeps its own graphics, emulator and save
-options or keys in `Game.gba.settings.tns` next to the ROM.
+options or keys in `Game.gba.settings.tns` in `gpSP_saves`.
 
-**Settings file.** This build keeps its settings in `gpsp_qol.cfg.tns` next to
-it; the first start takes them from older builds' `gpsp.cfg.tns`, which it
-then leaves alone, so an older build in the same folder keeps its own.
+**Settings.** The settings for all games are kept inside `_gpSP.tns` itself
+(an area after the program, which Ndless doesn't load), so they go wherever
+the program goes, with a copy in `gpSP_saves/gpsp_qol.cfg.tns`: a new
+`_gpSP.tns` copied over the old one takes them from the copy. The first
+start of this build takes them from `gpsp_qol.cfg.tns` next to gpSP (builds
+before), else from older builds' `gpsp.cfg.tns` (moved into `gpSP_saves`,
+only read), and puts them into the program file right away.
 
 **Speed.** *Show FPS counter* (Graphics options): off, on ("58/60": frames drawn
 a second / the most there can be; in fast forward the same, against the 12

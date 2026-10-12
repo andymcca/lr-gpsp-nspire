@@ -12,6 +12,7 @@
 #include "nspire.h"
 #include "nspire_frameskip.h"
 #include "nspire_frontend.h"
+#include "nspire_paths.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -97,7 +98,7 @@ void nspire_perf_log_flush(void)
   if (!perf_log_count)
     return;
   /* A new file each time: appending has garbled files on the calculator. */
-  snprintf(path, sizeof(path), "%s/gpsp_perf.txt.tns", main_path);
+  nspire_save_file(path, sizeof(path), "gpsp_perf.txt.tns");
   f = fopen(path, "w");
   if (f)
   {

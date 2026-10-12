@@ -13,12 +13,16 @@
 #include "nspire_brightness.h"
 #include "nspire_game_list.h"
 #include "nspire_clock.h"
+#include "nspire_paths.h"
+#include "nspire_selfstore.h"
 #include "gui.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+
+extern char unit_documents_dir[600];
 
 static int failures, checks;
 static char dir[512];
@@ -256,7 +260,8 @@ static long file_size(const char *path)
   return stat(path, &st) == 0 ? (long)st.st_size : -1;
 }
 
-/* Settings and keys go through gpsp.cfg.tns and a game's own file. */
+/* Settings and keys go through gpsp_qol.cfg.tns (in the saves folder) and
+ * a game's own file. */
 static void test_config(void)
 {
   char path[600], old_path[600], rom[600], game_cfg[600];
@@ -264,7 +269,7 @@ static void test_config(void)
   u32 old[37];
 
   snprintf(main_path, sizeof(main_path), "%s", dir);
-  snprintf(path, sizeof(path), "%s/gpsp_qol.cfg.tns", dir);
+  nspire_save_file(path, sizeof(path), "gpsp_qol.cfg.tns");
   snprintf(old_path, sizeof(old_path), "%s/gpsp.cfg.tns", dir);
   remove(path);
   remove(old_path);
@@ -355,7 +360,7 @@ static void test_config(void)
 
   /* A game's own settings. */
   snprintf(rom, sizeof(rom), "%s/Game.gba.tns", dir);
-  snprintf(game_cfg, sizeof(game_cfg), "%s/Game.gba.settings.tns", dir);
+  nspire_save_file(game_cfg, sizeof(game_cfg), "Game.gba.settings.tns");
   remove(game_cfg);
   screen_scale = scaled_raw;
   frameskip_value = 4;
@@ -429,7 +434,7 @@ static void test_config_versions(void)
   FILE *f;
 
   snprintf(main_path, sizeof(main_path), "%s", dir);
-  snprintf(path, sizeof(path), "%s/gpsp_qol.cfg.tns", dir);
+  nspire_save_file(path, sizeof(path), "gpsp_qol.cfg.tns");
   snprintf(old_path, sizeof(old_path), "%s/gpsp.cfg.tns", dir);
   remove(old_path);
 
@@ -497,7 +502,7 @@ static void test_config_versions(void)
 
   /* A game's own settings from the first QoL build (no version line). */
   snprintf(rom, sizeof(rom), "%s/Old.gba.tns", dir);
-  snprintf(game_cfg, sizeof(game_cfg), "%s/Old.gba.settings.tns", dir);
+  nspire_save_file(game_cfg, sizeof(game_cfg), "Old.gba.settings.tns");
   f = fopen(game_cfg, "w");
   fprintf(f, "own_settings=1\nscreen_scale=0\ncpu_speed=3\nframeskip_value=6\n");
   fclose(f);
@@ -523,6 +528,74 @@ static void test_config_versions(void)
 /* The slot keys, ) and ( as in PocketSNES: defaults, and settings from
  * before them (QOL2 files, version 2 game files) getting them only where
  * the keys are free; QOL3 files keep what was chosen, even no key. */
+/* The settings for all games go inside the program file too, and come from
+ * there first; a program without them (a new one copied over) takes the
+ * saves folder's copy, and before that this build's file next to gpSP. */
+static void test_settings_in_program(void)
+{
+  char program[600], copy[600], beside[600];
+  long bare, stored;
+  u8 data[300];
+  FILE *f;
+  int i;
+
+  snprintf(main_path, sizeof(main_path), "%s", dir);
+  snprintf(program, sizeof(program), "%s/_gpSP.tns", dir);
+  nspire_save_file(copy, sizeof(copy), "gpsp_qol.cfg.tns");
+  snprintf(beside, sizeof(beside), "%s/gpsp_qol.cfg.tns", dir);
+  f = fopen(program, "wb");
+  for (i = 0; i < 5000; i++)
+    fputc(i & 0xFF, f);
+  fclose(f);
+  bare = file_size(program);
+  snprintf(nspire_program_path, sizeof(nspire_program_path), "%.500s", program);
+
+  keys_set_defaults(key_bindings);
+  nspire_brightness = 4;
+  CHECK(nspire_config_save() == 0, "save");
+  stored = file_size(program);
+  CHECK(stored == bare + SELFSTORE_SIZE + 16, "the program file grew by its settings area: %ld", stored);
+  CHECK(selfstore_read(program, data, sizeof(data)) == 288, "288 bytes stored in it");
+  f = fopen(program, "rb");
+  for (i = 0; f && i < 5000 && fgetc(f) == (i & 0xFF); i++)
+    ;
+  if (f)
+    fclose(f);
+  CHECK(i == 5000, "the program's own bytes untouched (%d)", i);
+  CHECK(file_size(copy) == 288, "and the copy in the saves folder");
+
+  /* From the program file first. */
+  remove(copy);
+  nspire_brightness = 9;
+  CHECK(nspire_config_load() == 0 && nspire_brightness == 4, "loaded from the program: %u", nspire_brightness);
+  nspire_brightness = 6;
+  CHECK(nspire_config_save() == 0 && file_size(program) == stored, "saved again in place");
+  CHECK(nspire_config_load() == 0 && nspire_brightness == 6, "the new value: %u", nspire_brightness);
+
+  /* A new program file copied over: the copy in the saves folder. */
+  f = fopen(program, "wb");
+  for (i = 0; i < 5000; i++)
+    fputc(i & 0xFF, f);
+  fclose(f);
+  nspire_brightness = 2;
+  CHECK(nspire_config_load() == 0 && nspire_brightness == 6, "from the saves folder's copy: %u",
+        nspire_brightness);
+  CHECK(nspire_config_save() == 0 && file_size(program) == stored, "back in the program");
+
+  /* Before the saves folder: the file next to gpSP. */
+  rename(copy, beside);
+  f = fopen(program, "wb");
+  fclose(f);
+  nspire_brightness = 1;
+  CHECK(nspire_config_load() == 0 && nspire_brightness == 6, "from the file next to gpSP: %u",
+        nspire_brightness);
+  remove(beside);
+  remove(program);
+  nspire_program_path[0] = 0;
+  nspire_brightness = 0;
+  remove(copy);
+}
+
 static void test_slot_keys(void)
 {
   char path[600], rom[600], game_cfg[600];
@@ -534,7 +607,7 @@ static void test_slot_keys(void)
   CHECK(key_bindings[ACTION_PREVIOUS_SLOT][0].key == KEY_LPAREN, "previous slot: (");
 
   /* A QOL2 file (the build before) with the slots unbound and ( on Start. */
-  snprintf(path, sizeof(path), "%s/gpsp_qol.cfg.tns", dir);
+  nspire_save_file(path, sizeof(path), "gpsp_qol.cfg.tns");
   keys_set_defaults(key_bindings);
   key_bindings[ACTION_NEXT_SLOT][0].key = 0;
   key_bindings[ACTION_PREVIOUS_SLOT][0].key = 0;
@@ -570,7 +643,7 @@ static void test_slot_keys(void)
   /* A game's own keys from before version 3. */
   keys_set_defaults(key_bindings);
   snprintf(rom, sizeof(rom), "%s/Keys.gba.tns", dir);
-  snprintf(game_cfg, sizeof(game_cfg), "%s/Keys.gba.settings.tns", dir);
+  nspire_save_file(game_cfg, sizeof(game_cfg), "Keys.gba.settings.tns");
   f = fopen(game_cfg, "w");
   fprintf(f, "version=2\nown_keys=1\nkey_next_slot=0\nkey_previous_slot=0\nkey_a=%u\n", KEY_RPAREN);
   fclose(f);
@@ -673,7 +746,7 @@ static void test_game_list(void)
   game_list_move(names, 4, 1, 1);
   CHECK(!strcmp(names[1], "b.gba.tns") && !strcmp(names[3], "c.gbz.tns"), "nothing moves out of range");
 
-  snprintf(order_path, sizeof(order_path), "%s/%s", dir, GAME_ORDER_FILE);
+  nspire_order_file(order_path, sizeof(order_path), dir);
   game_list_forget_order(dir);
   game_list_sort(names, 4);
   CHECK(game_list_apply_order(names, 4, dir) == 0 && !strcmp(names[0], "A.gba.tns"), "no order: A to Z");
@@ -714,6 +787,8 @@ int main(int argc, char **argv)
     return 2;
   }
   snprintf(dir, sizeof(dir), "%s", argv[1]);
+  snprintf(unit_documents_dir, sizeof(unit_documents_dir), "%s/", dir);
+  nspire_save_dir_make();
 
   printf("turning frames\n");
   test_turn_raw();
@@ -724,6 +799,8 @@ int main(int argc, char **argv)
   printf("settings files\n");
   test_config();
   test_config_versions();
+  printf("settings in the program file\n");
+  test_settings_in_program();
   printf("slot keys\n");
   test_slot_keys();
   printf("brightness\n");

@@ -28,6 +28,15 @@ void host_hw_write(uint32_t reg, uint32_t value)
   }
 }
 
+/* The calculator's documents folder (Ndless's get_documents_dir), where
+ * the saves folder goes: the tests point it at their own folder. */
+char unit_documents_dir[600] = "./";
+
+const char *get_documents_dir(void)
+{
+  return unit_documents_dir;
+}
+
 /* The last message that would have been on the screen. */
 char unit_osd_message[64];
 

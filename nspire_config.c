@@ -1,8 +1,12 @@
-/* gpSP's settings: the file for all games, gpsp_qol.cfg.tns next to gpSP,
- * and a game's own settings and keys, "<ROM name>.settings.tns" next to the
- * ROM. Both have names of their own, so this build and older gpSP builds in
- * the same folder don't change each other's settings; the first start reads
- * the older builds' gpsp.cfg.tns.
+/* gpSP's settings: the ones for all games, kept inside the program file
+ * (nspire_selfstore.h) with a copy, gpsp_qol.cfg.tns, in the saves folder
+ * (nspire_paths.h), and a game's own settings and keys, "<ROM
+ * name>.settings.tns" in the saves folder. They're read from the program
+ * file, else from the copy (a new _gpSP.tns copied over the old one), else
+ * from gpsp_qol.cfg.tns next to gpSP (builds before the saves folder), else
+ * from the older builds' gpsp.cfg.tns (moved into the saves folder at start,
+ * with every settings file next to gpSP, so its folder has only the program
+ * and the games). It's only read, never written.
  *
  * gpsp_qol.cfg.tns is gpSP's binary file of 32-bit words. Words 0-36 are as
  * gpSP has always written them (older, shorter files still load); then:
@@ -37,6 +41,8 @@
 #include "nspire_states.h"
 #include "nspire_clock.h"
 #include "nspire_brightness.h"
+#include "nspire_paths.h"
+#include "nspire_selfstore.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -136,9 +142,61 @@ static void apply(const u32 *values)
 #define CONFIG_FILE     "gpsp_qol.cfg.tns"
 #define OLD_CONFIG_FILE "gpsp.cfg.tns"   /* older gpSP builds' */
 
-static void config_path(char *path, const char *name)
+/* A settings file next to gpSP (builds before the saves folder). */
+static void program_folder_path(char *path, const char *name)
 {
   sprintf(path, "%s/%s", main_path, name);
+}
+
+/* A whole settings file into o (at most CONFIG_WORDS words): its size, or
+ * -1 if it isn't there or is bigger than any settings file. */
+static long read_settings_file(const char *path, u32 *o)
+{
+  long size;
+  FILE *f = fopen(path, "rb");
+
+  if (!f)
+    return -1;
+  fseek(f, 0, SEEK_END);
+  size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  if (size < 0 || size > CONFIG_WORDS * 4 || fread(o, 1, (size_t)size, f) != (size_t)size)
+    size = -1;
+  fclose(f);
+  return size;
+}
+
+/* The settings came from the program file (not from a copy or an older
+ * file). */
+static int settings_in_program;
+
+int nspire_config_in_program(void)
+{
+  return settings_in_program;
+}
+
+/* The settings' bytes, from the first place that has them (see the top of
+ * this file). */
+static long read_settings(u32 *o)
+{
+  char path[600];
+  long size = selfstore_read(nspire_program_path, o, CONFIG_WORDS * 4);
+
+  settings_in_program = size >= 0;
+  if (size >= 0)
+    return size;
+  nspire_save_file(path, sizeof(path), CONFIG_FILE);
+  if ((size = read_settings_file(path, o)) >= 0)
+    return size;
+  program_folder_path(path, CONFIG_FILE);
+  if ((size = read_settings_file(path, o)) >= 0)
+    return size;
+  /* Older builds' file, moved into the saves folder at start. */
+  nspire_save_file(path, sizeof(path), OLD_CONFIG_FILE);
+  if ((size = read_settings_file(path, o)) >= 0)
+    return size;
+  program_folder_path(path, OLD_CONFIG_FILE);
+  return read_settings_file(path, o);
 }
 
 static void clamp_rom_buffer_size(void)
@@ -151,43 +209,20 @@ static void clamp_rom_buffer_size(void)
 
 s32 nspire_config_load(void)
 {
-  char path[600];
   u32 o[CONFIG_WORDS];
   long size;
   u32 words, i;
   int qol = 0;   /* 0: an older build's file, 1: QOL1, 2: QOL2, 3: this build's */
-  FILE *f;
 
-  config_path(path, CONFIG_FILE);
-  f = fopen(path, "rb");
-  if (!f)
-  {
-    /* The first start: the settings older gpSP builds left. */
-    config_path(path, OLD_CONFIG_FILE);
-    f = fopen(path, "rb");
-  }
-  if (!f)
-    return -1;
-  fseek(f, 0, SEEK_END);
-  size = ftell(f);
-  fseek(f, 0, SEEK_SET);
+  memset(o, 0, sizeof(o));
+  size = read_settings(o);
   /* Sizes gpSP's builds wrote (92 = keys, 96 = +BIOS, 112 = +frameskip,
    * 124 = +emulator options, 128 = +ROM buffer, 132 = +LCD cache, 136 = +FPS,
    * 140 = +blending, 144 = +dynarec SMC, 148 = +renderer, 152 = older
    * renderer), and this one's. */
   if (!(size == 92 || (size >= 96 && size <= 152 && size % 4 == 0) || size == CONFIG_WORDS * 4))
-  {
-    fclose(f);
     return -1;
-  }
-  memset(o, 0, sizeof(o));
   words = (u32)size / 4;
-  if (fread(o, 4, words, f) != words)
-  {
-    fclose(f);
-    return -1;
-  }
-  fclose(f);
 
   screen_scale = o[0] % 4;
   screen_filter = o[1] % 2;
@@ -315,13 +350,19 @@ static int write_global_file(void)
   o[63] = nspire_brightness;
   o[66] = nspire_compress_saves % 2;
 
-  config_path(path, CONFIG_FILE);
+  /* The copy in the saves folder, then the program file. */
+  nspire_save_dir_make();
+  nspire_save_file(path, sizeof(path), CONFIG_FILE);
   f = fopen(path, "wb");
-  if (!f)
-    return -1;
-  ok = fwrite(o, 4, CONFIG_WORDS, f) == CONFIG_WORDS;
-  if (fclose(f) != 0)
-    ok = 0;
+  ok = 0;
+  if (f)
+  {
+    ok = fwrite(o, 4, CONFIG_WORDS, f) == CONFIG_WORDS;
+    if (fclose(f) != 0)
+      ok = 0;
+  }
+  if (selfstore_write(nspire_program_path, o, sizeof(o)))
+    ok = 1;
   return ok ? 0 : -1;
 }
 

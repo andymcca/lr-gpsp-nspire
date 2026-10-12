@@ -6,6 +6,7 @@
 #include <strings.h>
 
 #include "nspire_game_list.h"
+#include "nspire_paths.h"
 
 static int compare_names(const void *a, const void *b)
 {
@@ -41,8 +42,7 @@ void game_list_move(char **names, unsigned count, unsigned from, unsigned to)
 
 static void order_path(char *path, size_t size, const char *dir)
 {
-  size_t len = strlen(dir);
-  snprintf(path, size, "%s%s%s", dir, len && dir[len - 1] == '/' ? "" : "/", GAME_ORDER_FILE);
+  nspire_order_file(path, size, dir);
 }
 
 int game_list_apply_order(char **names, unsigned count, const char *dir)
@@ -77,6 +77,7 @@ int game_list_save_order(char **names, unsigned count, const char *dir)
   FILE *f;
 
   order_path(path, sizeof(path), dir);
+  nspire_save_dir_make();
   f = fopen(path, "w");
   if (!f)
     return 0;
@@ -94,4 +95,50 @@ void game_list_forget_order(const char *dir)
   char path[1100];
   order_path(path, sizeof(path), dir);
   remove(path);
+}
+
+void game_list_rename(const char *dir, const char *old_name, const char *new_name)
+{
+  char path[1100], line[512];
+  char *text = NULL, *grown;
+  size_t len = 0, cap = 0, n;
+  int changed = 0;
+  FILE *f;
+
+  order_path(path, sizeof(path), dir);
+  f = fopen(path, "r");
+  if (!f)
+    return;
+  while (fgets(line, sizeof(line), f))
+  {
+    line[strcspn(line, "\r\n")] = 0;
+    if (!strcmp(line, old_name))
+    {
+      snprintf(line, sizeof(line), "%s", new_name);
+      changed = 1;
+    }
+    n = strlen(line) + 1;
+    if (len + n + 1 > cap)
+    {
+      cap = (len + n + 1) * 2;
+      grown = (char *)realloc(text, cap);
+      if (!grown)
+      {
+        free(text);
+        fclose(f);
+        return;
+      }
+      text = grown;
+    }
+    memcpy(text + len, line, n - 1);
+    text[len + n - 1] = '\n';
+    len += n;
+  }
+  fclose(f);
+  if (changed && (f = fopen(path, "w")) != NULL)
+  {
+    fwrite(text, 1, len, f);
+    fclose(f);
+  }
+  free(text);
 }

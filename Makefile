@@ -75,7 +75,8 @@ LOCAL_OBJS := \
   video_blend.o upscale_aspect.o scanline_fill16.o nspire_upscale_from_gba.o nspire_turn.o nspire.o nspire_rom_load_diag.o \
   nspire_gbz.o nspire_states.o nspire_config.o nspire_clock.o clock_switch_nspire.o nspire_keys.o \
   nspire_brightness.o nspire_game_list.o nspire_blend.o \
-  nspire_zip.o nspire_loading.o nspire_save_manager.o
+  nspire_zip.o nspire_loading.o nspire_save_manager.o nspire_paths.o \
+  nspire_selfstore.o nspire_rom_convert.o nspire_rom_manager.o
 
 OBJS := $(COMM_OBJS) $(CORE_OBJS) $(CORE_ASM_OBJS) $(CORE_CXX_OBJS) \
         $(LOCAL_OBJS) gui.o

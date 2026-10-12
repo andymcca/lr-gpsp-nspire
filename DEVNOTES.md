@@ -61,6 +61,9 @@ Where things are
 | `nspire_video_ui.c` | the menus' drawing (a landscape 5:5:5 frame turned by flip_screen) |
 | `nspire_loading.c` | the loading screen |
 | `nspire_save_manager.c` | the save manager |
+| `nspire_rom_manager.c`, `nspire_rom_convert.c` | the ROM manager: zipping and unzipping ROMs |
+| `nspire_paths.c` | the saves folder, game order file names, moving older files in |
+| `nspire_selfstore.c` | the settings kept inside the program file |
 | `nspire_states.c` | save state slots, file names (`nspire_game_base`) |
 | `nspire_backup.c` | in-game saves, plain or gzipped |
 | `nspire_zip.c` | zipped ROMs; `nspire_gbz.c`: .gbz ROMs |
@@ -111,6 +114,36 @@ Decisions and why
   quit gpSP.
 * **The newest state** is the one with the highest save counter among this
   build's states, else the latest file time (states from older builds).
+* **Saves in My Documents/gpSP_saves** (`nspire_paths.c`), as PocketSNES has
+  PocketSNES_saves: in-game saves, states, a game's settings, game orders
+  (`gpsp_order_<folder>.txt.tns`), logs, the clock marker, the last folder.
+  Not in the ROM folder, so `_gpSP.tns` stays first there (a folder is listed
+  above every file). Made at every start, so a new calculator gets it. The
+  user asked for it ("saves and states in a new folder ... even on a new
+  calc"). Older files move in at start (gpSP's folder) and when a game
+  starts (its folder): the GBA games' saves (names ending .gba, .agb or .bin
+  before the suffix, so `Game.gbc.sav.tns` stays), `gpsp_order.txt.tns`, and
+  from gpSP's folder its own files, the BIOS and every settings file of
+  gpSP's (gpsp*.cfg.tns, ..cfg.tns, Game.gba.cfg.tns, Game.cfg.tns when a
+  Game ROM is there; not ndless.cfg.tns or other programs'). The user: "only
+  games and the emulator in there, like pocketsnes". A file already in the
+  saves folder wins; the old one stays. Settings found anywhere but the
+  program file are written into it at start.
+* **Settings inside the program file** (`nspire_selfstore.c`), as PocketSNES:
+  a 4 KB area + 16-byte footer ("GPSPSETS") after the Zehn program, written
+  in place; a copy in the saves folder. Read order: program, copy, this
+  build's file next to gpSP, older builds' gpsp.cfg.tns. Ndless's Zehn
+  loader reads only the header's `file_size` bytes (`zehn_loader.cpp`), so
+  the area is never loaded; PocketSNES (a make-prg wrapper) does the same on
+  the calculator.
+* **ROM manager** (main menu line 9, `nspire_rom_manager.c`,
+  `nspire_rom_convert.c`), the user's request: C zips (zlib level 6, one
+  deflated file named as the game's saves, `Game.gba`), U unzips to `.gba`;
+  .gbz goes either way. Written as `<new>.tmp`, read back (the zip unpacks
+  to the CRC, a .gba has it), renamed, then the old file is deleted. The
+  running game can be converted when its whole ROM is in memory
+  (`nspire_rom_file_release` closes its file); gamepak_filename follows.
+  Line 9 so no older line moves.
 * **The program is `_gpSP.tns`** on the calculator (it was `gpsp_qol.tns`):
   the underscore sorts it above the games, so the folder opens on it, as
   `_PocketSNES.tns` does in PocketSNES. File types in `ndless.cfg.tns` that
@@ -145,6 +178,8 @@ Gotchas
   gpsp-host crashes), with the .gba as much as the .gbz. Check real ROMs'
   .gbz files page by page with `nspire_gbz.c` instead (all pages equal the
   ROM), and play-test on the calculator.
+* `make | head` (or any pipe that closes early) stops make with SIGPIPE and
+  leaves the old `.tns`: check the file's time and md5 after building.
 * An old gpSP build wrote `..cfg.tns` (a game's settings with no game open)
   into its folder; by character order it comes before `_gpSP.tns`. This
   build never writes it (`save_game_config_file` does nothing here); delete
@@ -165,6 +200,8 @@ PC only (not seen on the calculator yet):
   time ~3.6 ms a frame with interframe blending, from ~10.4).
 * The loading screen, zipped games, Compress saves and gzipped in-game
   saves, the save manager, the `(` `)` slot keys, the fast forward counter.
+* The saves folder and moving the old files in, the settings in the
+  program file, the ROM manager (how long zipping a 16 MB ROM takes).
 
 
 History
@@ -179,6 +216,9 @@ History
 * 2026-10-11: loading screen, zipped games, Compress saves (gzipped in-game
   saves, stored states), save manager, `(` `)` slot keys, fast forward
   counter as in PocketSNES, failed loads go back to the file list.
+* 2026-10-11, evening: saves folder My Documents/gpSP_saves (older files
+  moved in), settings inside `_gpSP.tns`, ROM manager (zip/unzip ROMs on the
+  calculator).
 * 2026-10-11, later: renamed `_gpSP.tns` (first in its folder); file types
   follow the name. The user's five GBA games went onto the calculator as
   .zip (61 MB of ROMs in 32 MB; first as .gbz, then zips at the user's

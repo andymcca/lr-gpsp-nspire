@@ -75,6 +75,12 @@ extern const char *nspire_rom_load_error;
 /* The game's saves, their sizes, compressing and deleting them
  * (nspire_save_manager.c; main menu > Save manager). */
 void nspire_save_manager(void);
+/* The folder's games, compressing them into .zip files and back
+ * (nspire_rom_manager.c; main menu > ROM manager). */
+void nspire_rom_manager(void);
+/* Closes the running game's ROM file if the whole ROM is in memory
+ * (gba_memory.c): 1 then, 0 if the game still reads pieces of it. */
+int nspire_rom_file_release(void);
 
 /* Set when the file browser started a game with shift+enter: its newest
  * state isn't loaded that time. */
@@ -86,6 +92,8 @@ void nspire_config_open_game(const char *rom_path);
 void nspire_config_close_game(void);
 s32 nspire_config_load(void);
 s32 nspire_config_save(void);
+/* The last load found the settings in the program file. */
+int nspire_config_in_program(void);
 /* The menu's "Settings for" / "Keys for" (0 all games, 1 this game), and
  * what to do when they change. */
 extern u32 nspire_settings_for;

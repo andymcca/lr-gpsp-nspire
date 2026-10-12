@@ -19,6 +19,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HOST = os.path.join(HERE, "build", "gpsp-host")
+PROGRAM = "_gpSP.tns"   # what gpsp-host runs as, in the game folder
 WORK = os.path.join(HERE, "build", "host_tests")
 
 # What the calculator's CPU spends, roughly (PocketSNES's measurements on
@@ -149,10 +150,13 @@ class Run:
             os.makedirs(self.gba)
             for rom in roms:
                 pattern_rom(os.path.join(self.gba, rom + ".gba.tns"))
+            # The program file, which keeps the settings for all games.
+            with open(os.path.join(self.gba, PROGRAM), "wb") as f:
+                f.write(bytes(range(256)) * 16)
         else:
-            # The same calculator folder as an earlier run (settings, saves).
+            # The same calculator as an earlier run (program, settings, saves).
             shutil.rmtree(self.dir, ignore_errors=True)
-            shutil.copytree(reuse.gba, self.gba)
+            shutil.copytree(reuse.dir, self.dir, ignore=shutil.ignore_patterns("out"))
         os.makedirs(self.out, exist_ok=True)
         for fname, content in (files or {}).items():
             path = os.path.join(self.gba, fname)
@@ -198,6 +202,10 @@ class Run:
     def file(self, name):
         return os.path.join(self.gba, name)
 
+    def save(self, name):
+        """A file in the saves folder (My Documents/gpSP_saves)."""
+        return os.path.join(self.dir, "gpSP_saves", name)
+
 
 # ---- The tests ----
 
@@ -224,7 +232,7 @@ quit
     check(57 <= b["frame"] - a["frame"] <= 61, "play: about 60 frames a second, %d" % (b["frame"] - a["frame"]))
     check(r.shot("game").bar_x() != r.shot("game2").bar_x(), "play: the picture moves")
     check(a["game"] == "Pattern.gba.tns", "play: the game")
-    check(os.path.exists(r.file("Pattern.gba0.svs.tns")), "play: Q saved a state")
+    check(os.path.exists(r.save("Pattern.gba0.svs.tns")), "play: Q saved a state")
     check(r.report["lcd_base_end"] == "os", "play: the OS's screen is back at the end")
     return r
 
@@ -266,7 +274,7 @@ quit
     # From Emulator options (line 1), one step at once and then 15 a second
     # after 0.4 s: Cheats (8), About (10) or Load new game (11).
     held = r.shot("held").active_menu_line()
-    check(held in (8, 10, 11), "menu: a held arrow repeats: line %s" % (held,))
+    check(held in (8, 9, 10), "menu: a held arrow repeats: line %s" % (held,))
     check(r.notes["later"]["frame"] - r.notes["back"]["frame"] >= 55, "menu: the game carries on after it")
     check(r.shot("game").box() == (0, 13, 319, 226), "menu: the picture is back whole")
 
@@ -311,13 +319,14 @@ quit
 """)
         box = r.shot("game").box()
         check(box == (0, 13, 319, 226), "%s: the 320x214 picture, %s" % (name, box))
-        words = read_words(r.file("gpsp_qol.cfg.tns"))
+        words = read_words(r.save("gpsp_qol.cfg.tns"))
         check(len(words) == 72 and words[37] == 0x334C4F51, "%s: saved as QOL3" % name)
         check(words[0] == 3, "%s: scaling saved as scaled/unblended: %d" % (name, words[0]))
         if name == "qol1_cfg":
             check(words[61] == 3, "qol1_cfg: 432 MHz kept: speed %d" % words[61])
         if name == "old_cfg":
-            check(os.path.getsize(r.file("gpsp.cfg.tns")) == 148, "old_cfg: the old build's file left alone")
+            check(not os.path.exists(r.file("gpsp.cfg.tns")) and os.path.getsize(r.save("gpsp.cfg.tns")) == 148,
+                  "old_cfg: the old build's file moved into gpSP_saves as it was")
 
 
 def test_unscaled_chosen():
@@ -403,7 +412,7 @@ quit
     check(n["menu_dimmer"]["backlight"] == 75, "brightness: the menu line, two down: %d"
           % n["menu_dimmer"]["backlight"])
     check(int(r.report["backlight_end"]) == 120, "brightness: the calculator's own back when gpSP closes")
-    words = read_words(r.file("gpsp_qol.cfg.tns"))
+    words = read_words(r.save("gpsp_qol.cfg.tns"))
     check(words[63] == 7, "brightness: level 7 saved: %d" % words[63])
 
     again = Run("brightness2", reuse=r).run("""
@@ -455,11 +464,11 @@ press Q
 wait 1
 quit
 """)
-    check(os.path.exists(r.file("Pattern.gba0.svs.tns")) and os.path.exists(r.file("Pattern.gba1.svs.tns")),
+    check(os.path.exists(r.save("Pattern.gba0.svs.tns")) and os.path.exists(r.save("Pattern.gba1.svs.tns")),
           "states: S saved slots 0 and 1")
-    check(os.path.exists(r.file("Pattern.gba2.svs.tns")), "states: Q saved slot 2")
+    check(os.path.exists(r.save("Pattern.gba2.svs.tns")), "states: Q saved slot 2")
     check(r.notes["loaded"]["frame"] < r.notes["saved1"]["frame"], "states: L went back to slot 1")
-    size = os.path.getsize(r.file("Pattern.gba0.svs.tns"))
+    size = os.path.getsize(r.save("Pattern.gba0.svs.tns"))
     check(size < 20000, "states: compressed (%d bytes)" % size)
 
     again = Run("states2", reuse=r).run("""
@@ -535,6 +544,221 @@ def test_file_types():
     check(none.report["registered"] == "gba=_gpSP,gbz=_gpSP", "file types: registered without a file")
 
 
+
+def test_new_calculator():
+    """On a calculator that never had gpSP: the first start makes My
+    Documents/gpSP_saves, everything gpSP writes goes there or into the
+    program file, and the game folder keeps only the program and games."""
+    r = Run("new_calculator", roms=("Pattern", "Second"))
+    program = r.file(PROGRAM)
+    bare = os.path.getsize(program)
+    r.run(REAL_COSTS + """wait 1
+press down
+press tab
+wait 0.2
+press up
+press enter
+wait 0.3
+press enter
+wait 1.5
+press S
+wait 0.5
+press +
+wait 0.3
+press Q
+wait 1
+""")
+    check(sorted(os.listdir(r.gba)) == sorted([PROGRAM, "Pattern.gba.tns", "Second.gba.tns"]),
+          "new calculator: only the program and games in the game folder: %s" % sorted(os.listdir(r.gba)))
+    saves = sorted(os.listdir(os.path.join(r.dir, "gpSP_saves")))
+    for name in ("gpsp_qol.cfg.tns", "gpsp_romdir.tns", "gpsp_order_gba.txt.tns", "Second.gba0.svs.tns"):
+        check(name in saves, "new calculator: %s in gpSP_saves: %s" % (name, saves))
+    check(os.path.getsize(program) == bare + 4096 + 16, "new calculator: the settings in the program file (%d -> %d)"
+          % (bare, os.path.getsize(program)))
+    stored = open(program, "rb").read()[bare:bare + 288]
+    check(stored == open(r.save("gpsp_qol.cfg.tns"), "rb").read(),
+          "new calculator: the program's settings are the copy's")
+    level = read_words(r.save("gpsp_qol.cfg.tns"))[63]
+    check(level != 0, "new calculator: brightness up saved (level %d)" % level)
+
+    # The settings come from the program: without the copy, still there.
+    os.remove(r.save("gpsp_qol.cfg.tns"))
+    again = Run("new_calculator2", reuse=r).run("wait 1\nquit\n")
+    # gpSP sets its brightness level at start: (10 - level) * 25 on the register.
+    check(int(again.report["backlight_end"]) == (10 - level) * 25,
+          "new calculator: settings read from the program file (backlight %s, level %d)"
+          % (again.report["backlight_end"], level))
+
+
+def test_old_layout():
+    """A calculator with files from builds before the saves folder (as the
+    user's): states, saves, settings (older builds' too), game order, last
+    folder and BIOS next to the games and gpSP move into gpSP_saves on the
+    first start (a game in another folder when it starts), and nothing is
+    lost: the newest state resumes, the settings and the order hold. The
+    game folder keeps only the program and the games; another emulator's
+    save stays."""
+    first = Run("old_layout_saves", roms=("Alpha", "Bravo")).run(REAL_COSTS + """wait 1
+press down
+press tab
+wait 0.2
+press up
+press enter
+wait 0.3
+press enter
+wait 1.5
+press S
+wait 0.5
+press +
+press +
+wait 0.3
+press Q
+wait 1
+""")
+    r = Run("old_layout", roms=("Alpha", "Bravo"))
+    os.makedirs(os.path.join(r.gba, "More"))
+    pattern_rom(os.path.join(r.gba, "More", "Inner.gba.tns"))
+    # The first run's files, put where the old builds kept them.
+    for name in os.listdir(first.save("")):
+        if name.startswith("gpsp_order"):
+            shutil.copy(first.save(name), r.file("gpsp_order.txt.tns"))
+        elif name != "gpsp_romdir.tns":
+            shutil.copy(first.save(name), r.file(name))
+    shutil.copy(r.file("Bravo.gba0.svs.tns"), os.path.join(r.gba, "More", "Inner.gba4.svs.tns"))
+    for name, text in (("gpsp.cfg.tns", "older build"), ("Game.gbc.sav.tns", "other emulator"),
+                       ("Alpha.gba.cfg.tns", "older build's game file"), ("Bravo.cfg.tns", "older still"),
+                       ("gba_bios.bin.tns", "not a BIOS: the built-in one stays in use")):
+        with open(r.file(name), "w") as f:
+            f.write(text)
+    r.run(REAL_COSTS + """wait 1
+shot list
+note list
+press enter
+wait 1.5
+note game
+press Q
+wait 1
+""")
+    left = sorted(os.listdir(r.gba))
+    check(left == sorted([PROGRAM, "Alpha.gba.tns", "Bravo.gba.tns", "More", "Game.gbc.sav.tns"]),
+          "old layout: only the program, games, folders and another emulator's save stay: %s" % left)
+    for name in ("Bravo.gba0.svs.tns", "gpsp_qol.cfg.tns", "gpsp_order_gba.txt.tns", "gpsp.cfg.tns",
+                 "Alpha.gba.cfg.tns", "Bravo.cfg.tns", "gba_bios.bin.tns"):
+        check(os.path.exists(r.save(name)), "old layout: %s moved into gpSP_saves" % name)
+    stored = open(r.file(PROGRAM), "rb").read()
+    check(len(stored) == 4096 + 4096 + 16 and stored[4096:4096 + 288] == open(r.save("gpsp_qol.cfg.tns"), "rb").read(),
+          "old layout: the settings went into the program file on the first start")
+    check(open(r.save("gpsp_order_gba.txt.tns")).read().split()[0] == "Bravo.gba.tns",
+          "old layout: the game order kept (Bravo first)")
+    check(r.notes["game"]["game"] == "Bravo.gba.tns", "old layout: the list's first game is Bravo: %s"
+          % r.notes["game"]["game"])
+    check(r.notes["game"]["frame"] > 90, "old layout: Bravo resumed from its state (frame %d)" % r.notes["game"]["frame"])
+    check(r.report["backlight_start"] != r.report["backlight_end"] or r.notes["list"]["backlight"] != 120,
+          "old layout: the brightness setting kept")
+    check(os.path.exists(os.path.join(r.gba, "More", "Inner.gba4.svs.tns")),
+          "old layout: a game in another folder keeps its files there until it starts")
+
+    inner = Run("old_layout_inner", reuse=r).run(REAL_COSTS + "wait 1.5\nquit\n",
+                                                 os.path.join("More", "Inner.gba.tns"))
+    check(not os.path.exists(os.path.join(inner.gba, "More", "Inner.gba4.svs.tns")) and
+          os.path.exists(inner.save("Inner.gba4.svs.tns")), "old layout: moved when its game starts")
+
+
+def zip_member(path):
+    with zipfile.ZipFile(path) as z:
+        check(z.testzip() is None, "rom manager: %s's CRC" % os.path.basename(path))
+        names = z.namelist()
+        return names, z.read(names[0])
+
+
+def test_rom_manager():
+    """The ROM manager, from the menu without a game: A marks all, C zips
+    them (as zip tools read them), U unzips them back to the same bytes;
+    the game order follows the new names. Then on the game that's running:
+    it keeps running, from its new file."""
+    r = Run("rom_manager", roms=("Alpha", "Bravo"))
+    originals = {n: open(r.file(n + ".gba.tns"), "rb").read() for n in ("Alpha", "Bravo")}
+    packed = os.path.join(r.dir, "Charlie.gba.tns")
+    pattern_rom(packed)
+    originals["Charlie"] = open(packed, "rb").read()
+    subprocess.run([sys.executable, "-I", os.path.join(HERE, "..", "..", "tools", "gbz.py"), "pack", "-o", r.gba,
+                    packed], check=True, capture_output=True)
+    open_manager = "press menu\nwait 0.3\n" + "press down\n" * 7 + "press enter\nwait 0.5\n"
+    r.run("""wait 1
+press down
+press tab
+wait 0.2
+press up
+press enter
+wait 0.3
+""" + open_manager + """shot manager
+press A
+wait 0.2
+press C
+wait 1
+shot compressed
+press esc
+wait 0.3
+press esc
+wait 0.5
+shot list
+quit
+""")
+    files = sorted(os.listdir(r.gba))
+    check(files == sorted([PROGRAM, "Alpha.zip.tns", "Bravo.zip.tns", "Charlie.zip.tns"]),
+          "rom manager: zips for all (the .gbz too): %s" % files)
+    for name, data in originals.items():
+        path = r.file(name + ".zip.tns")
+        if os.path.exists(path):
+            inner, content = zip_member(path)
+            check(inner == [name + ".gba"] and content == data, "rom manager: %s.zip holds %s.gba as it was"
+                  % (name, name))
+    order = open(r.save("gpsp_order_gba.txt.tns")).read().split("\n")
+    check(order[:2] == ["Bravo.zip.tns", "Alpha.zip.tns"], "rom manager: the order follows: %s" % order)
+    check(r.shot("manager").box(20, 50) is not None and r.shot("compressed").box(20, 50) is not None,
+          "rom manager: its list")
+
+    back = Run("rom_manager_back", reuse=r).run("""wait 1
+""" + open_manager + """press A
+wait 0.2
+press U
+wait 1
+shot uncompressed
+quit
+""")
+    files = sorted(os.listdir(back.gba))
+    check(files == sorted([PROGRAM, "Alpha.gba.tns", "Bravo.gba.tns", "Charlie.gba.tns"]),
+          "rom manager: U made .gba files: %s" % files)
+    for name, data in originals.items():
+        path = back.file(name + ".gba.tns")
+        check(os.path.exists(path) and open(path, "rb").read() == data, "rom manager: %s.gba as it was" % name)
+
+    # The game that's running: zipped under it, it plays on.
+    play = Run("rom_manager_running", reuse=back).run(REAL_COSTS + """wait 1
+press enter
+wait 1.5
+""" + open_manager + """press C
+wait 1
+shot running
+press esc
+wait 0.3
+press esc
+wait 0.5
+note a
+wait 1
+note b
+press S
+wait 0.5
+quit
+""")
+    check(not os.path.exists(play.file("Bravo.gba.tns")) and os.path.exists(play.file("Bravo.zip.tns")),
+          "rom manager: the running game zipped")
+    check(play.notes["a"]["game"] == "Bravo.zip.tns", "rom manager: it runs from its zip now: %s"
+          % play.notes["a"]["game"])
+    check(play.notes["b"]["frame"] > play.notes["a"]["frame"] + 50, "rom manager: the running game goes on")
+    check(os.path.exists(play.save("Bravo.gba0.svs.tns")), "rom manager: its states keep their name")
+
+
 def test_states_from_older_builds():
     """Older builds' states and the first QoL build's (as on the user's
     calculator: Emerald's slot 6 from the QoL build, then slots 0 and 1 from
@@ -556,13 +780,13 @@ wait 0.5
 quit
 """)
     s0, s1, s2 = (a.notes[n]["frame"] for n in ("s0", "s1", "s2"))
-    gpsz_to_raw(a.file("Pattern.gba0.svs.tns"))
-    gpsz_to_raw(a.file("Pattern.gba1.svs.tns"))
-    gpsz_unflag(a.file("Pattern.gba2.svs.tns"))
-    check(os.path.getsize(a.file("Pattern.gba1.svs.tns")) == 425984, "older states: a raw 416 KB state")
-    os.utime(a.file("Pattern.gba2.svs.tns"), (1000 + 10 * 60, 1000 + 10 * 60))   # the QoL build's, 16:10
-    os.utime(a.file("Pattern.gba0.svs.tns"), (1000 + 20 * 60, 1000 + 20 * 60))   # the old build's, 16:20
-    os.utime(a.file("Pattern.gba1.svs.tns"), (1000 + 23 * 60, 1000 + 23 * 60))   # and 16:23
+    gpsz_to_raw(a.save("Pattern.gba0.svs.tns"))
+    gpsz_to_raw(a.save("Pattern.gba1.svs.tns"))
+    gpsz_unflag(a.save("Pattern.gba2.svs.tns"))
+    check(os.path.getsize(a.save("Pattern.gba1.svs.tns")) == 425984, "older states: a raw 416 KB state")
+    os.utime(a.save("Pattern.gba2.svs.tns"), (1000 + 10 * 60, 1000 + 10 * 60))   # the QoL build's, 16:10
+    os.utime(a.save("Pattern.gba0.svs.tns"), (1000 + 20 * 60, 1000 + 20 * 60))   # the old build's, 16:20
+    os.utime(a.save("Pattern.gba1.svs.tns"), (1000 + 23 * 60, 1000 + 23 * 60))   # and 16:23
 
     b = Run("older_states2", reuse=a).run("""
 wait 1
@@ -577,11 +801,11 @@ quit
     resumed = b.notes["resumed"]["frame"]
     check(s1 <= resumed < s2, "older states: slot 1, the last written, resumed: frame %d (slots %d %d %d)"
           % (resumed, s0, s1, s2))
-    check(os.path.exists(b.file("Pattern.gba3.svs.tns")), "older states: the next save goes to slot 3")
+    check(os.path.exists(b.save("Pattern.gba3.svs.tns")), "older states: the next save goes to slot 3")
 
     # The calculator was reset since: this build's state has the older date,
     # but its count still makes it the newest.
-    os.utime(b.file("Pattern.gba3.svs.tns"), (500, 500))
+    os.utime(b.save("Pattern.gba3.svs.tns"), (500, 500))
     c = Run("older_states3", reuse=b).run("""
 wait 1
 press enter
@@ -642,7 +866,7 @@ wait 0.3
 shot moved
 quit
 """)
-    order = open(r.file("gpsp_order.txt.tns")).read().split()
+    order = open(r.save("gpsp_order_gba.txt.tns")).read().split()
     check(order == ["Delta.gba.tns", "Alpha.gba.tns", "Bravo.gba.tns", "Charlie.gba.tns"],
           "move: Delta to the top: %s" % order)
     check(r.shot("moved").active_list_row() == 0, "move: the highlight stays on it")
@@ -670,7 +894,7 @@ note started
 quit
 """)
     check(cancel.notes["started"]["game"] == "Delta.gba.tns", "move: esc puts it back")
-    check(open(cancel.file("gpsp_order.txt.tns")).read().split()[0] == "Delta.gba.tns",
+    check(open(cancel.save("gpsp_order_gba.txt.tns")).read().split()[0] == "Delta.gba.tns",
           "move: esc doesn't save")
 
     sort = Run("move4", reuse=r).run("""
@@ -684,7 +908,7 @@ wait 0.5
 note started
 quit
 """)
-    check(not os.path.exists(sort.file("gpsp_order.txt.tns")), "sort: the order is forgotten")
+    check(not os.path.exists(sort.save("gpsp_order_gba.txt.tns")), "sort: the order is forgotten")
     check(sort.notes["started"]["game"] == "Alpha.gba.tns", "sort: A to Z again, 1 starts Alpha")
 
 
@@ -713,7 +937,7 @@ note back
 quit
 """)
     check(r.shot("option").active_menu_line() == 13, "speed test: on its line")
-    path = r.file("gpsp_results.txt.tns")
+    path = r.save("gpsp_results.txt.tns")
     check(os.path.exists(path), "speed test: gpsp_results.txt written")
     if os.path.exists(path):
         text = open(path).read()
@@ -784,7 +1008,7 @@ wait 1
 quit
 """)
     check(r.notes["playing"]["game"] == "Inner.gba.tns", "folders: the game in the folder")
-    check(os.path.exists(os.path.join(r.gba, "Games", "Inner.gba0.svs.tns")), "folders: its state is there")
+    check(os.path.exists(r.save("Inner.gba0.svs.tns")), "folders: its state is there")
     again = Run("folders2", reuse=r).run("""
 wait 1
 press 1
@@ -815,7 +1039,7 @@ quit
 """)
     check(r.notes["a"]["game"] == "Packed.gbz.tns", "gbz: listed and started: %s" % r.notes["a"]["game"])
     check(55 <= r.notes["b"]["frame"] - r.notes["a"]["frame"] <= 61, "gbz: plays")
-    check(os.path.exists(r.file("Packed.gba0.svs.tns")), "gbz: states named after the .gba")
+    check(os.path.exists(r.save("Packed.gba0.svs.tns")), "gbz: states named after the .gba")
 
 
 def test_menu_load_and_exit():
@@ -849,10 +1073,10 @@ quit
 """)
     check(r.shot("load_line").active_menu_line() == 11, "load: on Load new game")
     check(r.notes["bravo"]["game"] == "Bravo.gba.tns", "load: the other game runs")
-    check(os.path.exists(r.file("Alpha.gba0.svs.tns")), "load: the first game was saved on leaving")
+    check(os.path.exists(r.save("Alpha.gba0.svs.tns")), "load: the first game was saved on leaving")
     check(r.shot("exit_line").active_menu_line() == 15, "exit: on Exit gpSP")
     check("quit" not in r.notes, "exit: gpSP closed by itself")
-    check(os.path.exists(r.file("Bravo.gba0.svs.tns")), "exit: the game was saved")
+    check(os.path.exists(r.save("Bravo.gba0.svs.tns")), "exit: the game was saved")
     check(r.report["lcd_base_end"] == "os", "exit: the OS's screen back")
 
 
@@ -1065,7 +1289,7 @@ quit
 """)
     check(r.shot("game").box() == (0, 13, 319, 226), "zip: the picture")
     check(r.notes["b"]["frame"] > r.notes["a"]["frame"] + 50, "zip: the game runs")
-    check(os.path.exists(r.file("Pattern.gba0.svs.tns")), "zip: the state is named after the ROM in it")
+    check(os.path.exists(r.save("Pattern.gba0.svs.tns")), "zip: the state is named after the ROM in it")
 
     bad = Run("zipped_broken", reuse=r).run("""wait 1
 press enter
@@ -1129,7 +1353,7 @@ wait 0.5
 shot uncompressed
 quit
 """)
-    slot0, slot1 = r.file("Pattern.gba0.svs.tns"), r.file("Pattern.gba1.svs.tns")
+    slot0, slot1 = r.save("Pattern.gba0.svs.tns"), r.save("Pattern.gba1.svs.tns")
     check(os.path.getsize(slot0) > 400000, "save manager: U uncompressed slot 0 (%d bytes)" % os.path.getsize(slot0))
     check(os.path.getsize(slot1) < 100000, "save manager: slot 1 still compressed")
     check(r.shot("manager").box(20, 40) is not None, "save manager: its list")
@@ -1151,10 +1375,10 @@ wait 0.5
 shot deleted
 quit
 """)
-    check(r2.exit == 0 and os.path.getsize(r2.file("Pattern.gba1.svs.tns")) < 100000,
+    check(r2.exit == 0 and os.path.getsize(r2.save("Pattern.gba1.svs.tns")) < 100000,
           "save manager: A then C compressed them all")
-    check(not os.path.exists(r2.file("Pattern.gba0.svs.tns")), "save manager: del, del deleted slot 0")
-    check(os.path.exists(r2.file("Pattern.gba1.svs.tns")), "save manager: only the one picked")
+    check(not os.path.exists(r2.save("Pattern.gba0.svs.tns")), "save manager: del, del deleted slot 0")
+    check(os.path.exists(r2.save("Pattern.gba1.svs.tns")), "save manager: only the one picked")
 
 
 def test_every_menu_line():
@@ -1171,8 +1395,8 @@ def test_every_menu_line():
         for i in range(1, count):
             lines += ["press down", "wait 0.15", "shot %s_%02d" % (name, i)]
         lines += ["press esc", "wait 0.3"]
-    lines += ["press down"] * 7 + ["press enter", "wait 0.3", "shot about", "press esc", "wait 0.3"]
-    for i in range(12):
+    lines += ["press down"] * 8 + ["press enter", "wait 0.3", "shot about", "press esc", "wait 0.3"]
+    for i in range(13):
         lines += ["shot main_%02d" % i, "press down", "wait 0.15"]
     lines.append("quit")
     r = Run("every_menu_line").run("\n".join(lines) + "\n")
@@ -1180,8 +1404,8 @@ def test_every_menu_line():
         if expected:
             seen = [r.shot("%s_%02d" % (name, i)).active_menu_line() for i in range(count)]
             check(seen == expected, "every menu line: %s highlights %s" % (name, seen))
-    main = [r.shot("main_%02d" % i).active_menu_line() for i in range(12)]
-    check(main == [0, 1, 3, 4, 5, 6, 8, 10, 11, 12, 13, 15], "every menu line: main highlights %s" % main)
+    main = [r.shot("main_%02d" % i).active_menu_line() for i in range(13)]
+    check(main == [0, 1, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 15], "every menu line: main highlights %s" % main)
 
 
 TESTS = [test_play, test_menu, test_menu_slow_game, test_old_settings, test_unscaled_chosen,
@@ -1189,7 +1413,7 @@ TESTS = [test_play, test_menu, test_menu_slow_game, test_old_settings, test_unsc
          test_hotkeys_in_menu_keys, test_folders, test_gbz, test_menu_load_and_exit, test_frameskip,
          test_fps_counter_and_fast_forward, test_blended, test_loading_screen, test_zipped_game,
          test_slot_keys, test_save_manager, test_every_menu_line, test_states_from_older_builds,
-         test_file_types]
+         test_file_types, test_new_calculator, test_old_layout, test_rom_manager]
 
 
 def main():

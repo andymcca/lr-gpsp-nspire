@@ -16,6 +16,7 @@
 #include "nspire_states.h"
 #include "nspire_clock.h"
 #include "nspire_brightness.h"
+#include "nspire_paths.h"
 
 #include <os.h>
 #include <ctype.h>
@@ -25,15 +26,29 @@
 #include <string.h>
 #include <unistd.h>
 
+/* The official BIOS file: in the saves folder, where gpSP moves it from
+ * its own folder at start (nspire_paths.h), else still next to gpSP. */
+static void bios_path(char *path, size_t size)
+{
+  FILE *f;
+  nspire_save_file(path, size, "gba_bios.bin.tns");
+  if ((f = fopen(path, "rb")) != NULL)
+  {
+    fclose(f);
+    return;
+  }
+  snprintf(path, size, "%s/gba_bios.bin.tns", main_path);
+}
+
 #if defined(NSPIRE_LIBRETRO)
 static void nspire_sync_bios_menu_from_disk(void)
 {
-  char path[512];
+  char path[600];
   FILE *fp;
   long sz;
   unsigned char b;
 
-  sprintf(path, "%s/gba_bios.bin.tns", main_path);
+  bios_path(path, sizeof(path));
 
   fp = fopen(path, "rb");
   if (!fp)
@@ -125,11 +140,13 @@ static void ChangeWorkingDirectory(char *exe)
   }
 }
 
+/* The file list's last folder, kept in the saves folder. */
 static void switch_to_romdir(void)
 {
-  char buff[256];
+  char buff[600];
   int r;
-  file_open(romdir_file, "gpsp_romdir.tns", read);
+  nspire_save_file(buff, sizeof(buff), "gpsp_romdir.tns");
+  file_open(romdir_file, buff, read);
 
   if (file_check_valid(romdir_file))
   {
@@ -149,7 +166,7 @@ static void save_romdir(void)
 {
   char buff[512];
 
-  sprintf(buff, "%s/gpsp_romdir.tns", main_path);
+  nspire_save_file(buff, sizeof(buff), "gpsp_romdir.tns");
   file_open(romdir_file, buff, write);
 
   if (file_check_valid(romdir_file))
@@ -248,6 +265,7 @@ int nspire_start_game(const char *rom_path)
   }
 
   nspire_loading_start(rom_path);
+  nspire_game_move_old_files(rom_path);
   nspire_config_open_game(rom_path);
   nspire_apply_bios();
   if (load_gamepak(NULL, rom_path, nspire_rtc_force_value(), FEAT_AUTODETECT,
@@ -366,9 +384,9 @@ int nspire_apply_bios(void)
   }
 
   {
-    char path[512];
+    char path[600];
 
-    sprintf(path, "%s/gba_bios.bin.tns", main_path);
+    bios_path(path, sizeof(path));
     if (load_bios(path) != 0 || bios_rom[0] != 0x18U)
     {
       memcpy(bios_rom, open_gba_bios_rom, sizeof(bios_rom));
@@ -613,7 +631,7 @@ void nspire_speed_test(void)
   video_resolution_large();
 
   /* A new file each run: appending has garbled files on the calculator. */
-  snprintf(path, sizeof(path), "%s/gpsp_results.txt.tns", main_path);
+  nspire_save_file(path, sizeof(path), "gpsp_results.txt.tns");
   f = fopen(path, "w");
   if (f)
   {
@@ -770,8 +788,17 @@ int main(int argc, char *argv[])
 
   ChangeWorkingDirectory(argv[0]);
   getcwd(main_path, sizeof(main_path));
+  /* The saves folder, made on the first start (also on a new calculator),
+   * and what earlier builds left next to gpSP moved in, before the
+   * settings are read (nspire_paths.h). */
+  snprintf(nspire_program_path, sizeof(nspire_program_path), "%s", argv[0]);
+  nspire_save_dir_make();
+  nspire_move_old_files(main_path, 1);
   keys_set_defaults(key_bindings);
-  load_config_file();
+  /* Settings found elsewhere (the saves folder's copy, an older build's
+   * file) go into the program file now, not at the next save. */
+  if (load_config_file() == 0 && !nspire_config_in_program())
+    save_config_file();
 #if defined(NSPIRE_LIBRETRO)
   nspire_sync_bios_menu_from_disk();
 #endif

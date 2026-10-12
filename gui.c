@@ -1905,6 +1905,11 @@ u32 menu(u16 *original_screen)
     if(!first_load)
       nspire_save_manager();
   }
+
+  void menu_rom_manager()
+  {
+    nspire_rom_manager();
+  }
 #else
   void menu_save_state()
   {
@@ -2374,7 +2379,7 @@ u32 menu(u16 *original_screen)
     string_selection_option(NULL, "GBA BIOS source", bios_source_options,
      &nspire_bios_choice, 2,
      "Built-in: the open BIOS in gpSP. File: the\n"
-     "official one, gba_bios.bin.tns next to gpSP.\n"
+     "official gba_bios.bin.tns, in gpSP_saves.\n"
      "Applies when a game is loaded or restarted.", 3),
     string_selection_option(NULL, "No sprite limit", nspire_sprlim_options,
      &nspire_sprlim_choice, 2,
@@ -2542,6 +2547,11 @@ u32 menu(u16 *original_screen)
      "Cheats, save state options (auto-increment, save\n"
      "when leaving, load on start), in-game saves,\n"
      "compressing saves.", 8),
+#if defined(NSPIRE_LIBRETRO)
+    action_option(menu_rom_manager, NULL, "ROM manager",
+     "This folder's games: compress them into .zip\n"
+     "files or back into .gba files. Saves stay.", 9),
+#endif
     submenu_option(&about_menu, "About",
      "View credits and acknowledgements.", 10),
     action_option(menu_load, NULL, "Load new game",

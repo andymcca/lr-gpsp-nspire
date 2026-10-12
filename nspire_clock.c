@@ -19,6 +19,7 @@
 #include "common.h"
 #include "nspire.h"
 #include "nspire_clock.h"
+#include "nspire_paths.h"
 #include "nspire_frontend.h"
 
 #include <stdio.h>
@@ -254,7 +255,7 @@ static u32 set_multiplier(int multiplier)
 
 static void marker_path(char *path, u32 size)
 {
-  snprintf(path, size, "%s/%s", main_path, CLOCK_MARKER);
+  nspire_save_file(path, size, CLOCK_MARKER);
 }
 
 void nspire_clock_check_crash(void)

@@ -2647,6 +2647,24 @@ static void reset_gamepak_pages(void)
   clear_gamepak_stickybits();
 }
 
+/* The ROM manager is about to replace the running game's file
+ * (nspire_rom_manager.c). The file can go when the whole ROM is in memory:
+ * it's closed then, as nothing reads it any more. 0 when the game still
+ * reads pages of it. */
+int nspire_rom_file_release(void)
+{
+  if (gamepak_must_swap())
+    return 0;
+  gbz_close(gamepak_gbz);
+  gamepak_gbz = NULL;
+  if (gamepak_file_large)
+  {
+    filestream_close(gamepak_file_large);
+    gamepak_file_large = NULL;
+  }
+  return 1;
+}
+
 /* A zipped game (nspire_zip.h): unpacked into memory whole, as a deflated
  * file can only be read from its start. When the ROM buffer is smaller
  * than the ROM, more of it is taken for this game, if memory allows. */

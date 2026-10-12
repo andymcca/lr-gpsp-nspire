@@ -1,7 +1,8 @@
 /* Cartridge save (SRAM / Flash / EEPROM) persistence for NSPIRE_LIBRETRO.
  *
  * An in-game save is the cartridge's memory as it is (the size says the
- * type): "<ROM name>.sav.tns", what other gpSP builds and PC emulators read,
+ * type), in the saves folder (nspire_paths.h): "<ROM name>.sav.tns", what
+ * other gpSP builds and PC emulators read,
  * or with Compress saves on, gzipped: "<ROM name>.sav.gz.tns" (a PC unpacks
  * it like any .gz), as PocketSNES does. Writing one form removes the other;
  * loading takes the newer of the two. A compressed ROM (.gbz.tns) or a zip

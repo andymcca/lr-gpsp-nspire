@@ -1,10 +1,10 @@
 /* Save state slots 0 to 999.
  *
- * A game's states sit next to its ROM, named the way gpSP always named them:
- * "<ROM file name without .tns><slot>.svs.tns", so slot 12 of
- * "Pokemon.gba.tns" is "Pokemon.gba12.svs.tns". A compressed ROM
+ * A game's states are in the saves folder (nspire_paths.h), named the way
+ * gpSP always named them: "<ROM file name without .tns><slot>.svs.tns", so
+ * slot 12 of "Pokemon.gba.tns" is "Pokemon.gba12.svs.tns". A compressed ROM
  * ("Pokemon.gbz.tns") or a zip with "Pokemon.gba" in it uses the same names
- * as the plain one.
+ * as the plain one. Earlier builds kept them next to the ROM.
  *
  * States are written zlib-compressed behind a 32-byte header ("GPSZ") that
  * also counts saves, so the newest state is the one with the highest count;
@@ -21,10 +21,19 @@
 
 #define STATE_SLOTS 1000
 
-/* The name a game's own files are built from: the ROM's path without its
- * last extension, with ".gbz" turned into ".gba" ("dir/Pokemon.gba"); for a
- * zip, the ROM's name in it, in the zip's folder. */
+/* The name a game's own files are built from: the ROM's file name without
+ * its last extension, with ".gbz" turned into ".gba" ("Pokemon.gba"); for a
+ * zip, the ROM's name in it. */
+void nspire_game_name(const char *rom_path, char *out, size_t size);
+/* That name in the saves folder ("<saves folder>/Pokemon.gba"). */
 void nspire_game_base(const char *rom_path, char *out, size_t size);
+/* Where builds before the saves folder kept them: next to the ROM
+ * ("dir/Pokemon.gba"). */
+void nspire_game_old_base(const char *rom_path, char *out, size_t size);
+/* Moves what earlier builds left in the game's folder (this game's files
+ * and the other GBA games', and the folder's game order) into the saves
+ * folder. Before a game's files are opened. */
+void nspire_game_move_old_files(const char *rom_path);
 
 /* Points the slot functions at a ROM and looks up which slots it has. */
 void states_open_game(const char *rom_path);

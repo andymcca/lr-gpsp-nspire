@@ -4,6 +4,7 @@
 #include "nspire_states.h"
 #include "nspire_zip.h"
 #include "nspire_frontend.h"
+#include "nspire_paths.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -35,20 +36,19 @@ struct state_header
   u32 reserved[2];
 };
 
-static char base_path[512];   /* "dir/Pokemon.gba" */
+static char base_path[512];   /* "<saves folder>/Pokemon.gba" */
 static unsigned char used[STATE_SLOTS];
 static unsigned char counted[STATE_SLOTS];   /* has STATE_FLAG_COUNTED */
 static u32 counters[STATE_SLOTS];
 static u32 mtimes[STATE_SLOTS];             /* the file's modified time */
 static u8 io_buffer[CHUNK];
 
-/* A zip's saves are named after the ROM in it, in the zip's folder, so the
- * zipped and unzipped game share them. The name is looked up once per zip. */
-static int zip_base(const char *rom_path, char *out, size_t size)
+/* A zip's saves are named after the ROM in it, so the zipped and unzipped
+ * game share them. The name is looked up once per zip. */
+static int zip_name(const char *rom_path, char *out, size_t size)
 {
   static char last_zip[512], last_inner[256];
-  const char *slash;
-  size_t len = strlen(rom_path), dir_len;
+  size_t len = strlen(rom_path);
 
   if (!((len > 8 && !strcasecmp(rom_path + len - 8, ".zip.tns")) ||
         (len > 4 && !strcasecmp(rom_path + len - 4, ".zip"))))
@@ -59,29 +59,56 @@ static int zip_base(const char *rom_path, char *out, size_t size)
       return 0;
     snprintf(last_zip, sizeof(last_zip), "%s", rom_path);
   }
-  slash = strrchr(rom_path, '/');
-  dir_len = slash ? (size_t)(slash - rom_path) + 1 : 0;
-  snprintf(out, size, "%.*s%s", (int)dir_len, rom_path, last_inner);
+  snprintf(out, size, "%s", last_inner);
   return 1;
+}
+
+void nspire_game_name(const char *rom_path, char *out, size_t size)
+{
+  const char *slash = strrchr(rom_path, '/');
+  const char *file = slash ? slash + 1 : rom_path;
+  const char *dot = strrchr(file, '.');
+  size_t len = dot && dot != file ? (size_t)(dot - file) : strlen(file);
+
+  if (zip_name(rom_path, out, size))
+    return;
+  if (len >= size)
+    len = size - 1;
+  memcpy(out, file, len);
+  out[len] = 0;
+  if (len >= 4 && !strcasecmp(out + len - 4, ".gbz"))
+    memcpy(out + len - 4, ".gba", 4);
 }
 
 void nspire_game_base(const char *rom_path, char *out, size_t size)
 {
+  char name[300];
+  nspire_game_name(rom_path, name, sizeof(name));
+  nspire_save_file(out, size, name);
+}
+
+void nspire_game_old_base(const char *rom_path, char *out, size_t size)
+{
+  char name[300];
   const char *slash = strrchr(rom_path, '/');
-  const char *dot = strrchr(rom_path, '.');
-  size_t len = strlen(rom_path);
+  nspire_game_name(rom_path, name, sizeof(name));
+  snprintf(out, size, "%.*s%s", slash ? (int)(slash - rom_path) + 1 : 0, rom_path, name);
+}
 
-  if (zip_base(rom_path, out, size))
-    return;
+void nspire_game_move_old_files(const char *rom_path)
+{
+  char dir[512], old_base[600], base[600];
+  const char *slash = strrchr(rom_path, '/');
 
-  if (dot && (!slash || dot > slash))
-    len = (size_t)(dot - rom_path);
-  if (len >= size)
-    len = size - 1;
-  memcpy(out, rom_path, len);
-  out[len] = 0;
-  if (len >= 4 && !strcasecmp(out + len - 4, ".gbz"))
-    memcpy(out + len - 4, ".gba", 4);
+  snprintf(dir, sizeof(dir), "%.*s", slash ? (slash == rom_path ? 1 : (int)(slash - rom_path)) : 1,
+           slash ? rom_path : ".");
+  nspire_move_old_files(dir, 0);
+  /* A game whose name the folder sweep doesn't know (a zip's ROM named
+   * otherwise than .gba). */
+  nspire_game_old_base(rom_path, old_base, sizeof(old_base));
+  nspire_game_base(rom_path, base, sizeof(base));
+  nspire_save_dir_make();
+  nspire_move_game_files(old_base, base);
 }
 
 void states_file_name(int slot, char *out, size_t size)
