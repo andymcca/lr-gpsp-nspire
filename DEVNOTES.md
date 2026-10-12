@@ -237,7 +237,16 @@ History
   wish, like the SNES games), unpacked whole into the 32 MB ROM buffer.
 * 2026-10-11, night: the saves folder renamed zgpSP_saves (below the game
   folders in My Documents; PocketSNES's zPocketSNES_saves the same way);
-  gpSP_saves and My Documents' `..cfg.tns` move in at start.
+  gpSP_saves and My Documents' `..cfg.tns` move in at start. Confirmed on
+  the calculator: the first start moved everything.
+* 2026-10-11, night: the OS's file list is a cached copy that never
+  re-reads a folder after a program moves files (the owner still saw old
+  saves in /gba and gpSP_saves after the move). `nspire_restore` calls
+  Ndless's `refresh_osscr()` (upstream had it commented out); uploaded as
+  /gba/_gpSP.tns (465,292 B with the settings area, md5 dec49a0e…), not
+  yet seen on the calculator. A GBA zip opened from My Documents starts
+  PocketSNES (it owns .zip); PocketSNES now says to start it in gpSP
+  instead of running it.
 
 
 Open items and ideas
