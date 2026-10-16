@@ -1340,6 +1340,34 @@ static void trace_instruction(u32 pc, u32 mode)
     ARM_ORR_REG_IMMSHIFT(0, reg_a2, reg_a2, ARMREG_LR, ARMSHIFT_ASR, 31);
 #endif
 
+#ifdef NSPIRE_BUILD
+/* The TI-Nspire's ARM926 has a 16 KB instruction cache: the region lookup
+ * is one shared stub per access type (arm_stub.S, mem_dispatch), called
+ * with "bl"; the translated code is a quarter smaller. The translation
+ * caches are in the program image, near the stubs (bl reaches 32 MB). */
+void mem_dispatch_store_u8(void);
+void mem_dispatch_store_u16(void);
+void mem_dispatch_store_u32(void);
+void mem_dispatch_store_u32_safe(void);
+void mem_dispatch_load_u8(void);
+void mem_dispatch_load_s8(void);
+void mem_dispatch_load_u16(void);
+void mem_dispatch_load_s16(void);
+void mem_dispatch_load_u32(void);
+
+#define generate_mem_dispatch(name)                                           \
+  ARM_BL(0, arm_relative_offset(translation_ptr, (u32)(name)));               \
+
+#define generate_store_call_u8()        generate_mem_dispatch(mem_dispatch_store_u8)
+#define generate_store_call_u16()       generate_mem_dispatch(mem_dispatch_store_u16)
+#define generate_store_call_u32()       generate_mem_dispatch(mem_dispatch_store_u32)
+#define generate_store_call_u32_safe()  generate_mem_dispatch(mem_dispatch_store_u32_safe)
+#define generate_load_call_u8()         generate_mem_dispatch(mem_dispatch_load_u8)
+#define generate_load_call_s8()         generate_mem_dispatch(mem_dispatch_load_s8)
+#define generate_load_call_u16()        generate_mem_dispatch(mem_dispatch_load_u16)
+#define generate_load_call_s16()        generate_mem_dispatch(mem_dispatch_load_s16)
+#define generate_load_call_u32()        generate_mem_dispatch(mem_dispatch_load_u32)
+#else
 #define generate_load_call_byte(tblnum)                                       \
   mem_calc_region(0);                                                         \
   generate_add_imm(reg_a2, (STORE_TBL_OFF + 68*tblnum + 4) >> 2, 0);          \
@@ -1368,6 +1396,7 @@ static void trace_instruction(u32 pc, u32 mode)
 #define generate_load_call_u16()        generate_load_call_mbyte(6, 1)
 #define generate_load_call_s16()        generate_load_call_mbyte(7, 1)
 #define generate_load_call_u32()        generate_load_call_mbyte(8, 2)
+#endif
 
 
 #define arm_access_memory_load(mem_type)                                      \

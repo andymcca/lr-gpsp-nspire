@@ -208,9 +208,34 @@ static void repack_gba_to_upscale_src(const u16 *frame, u32 pitch)
 static u16 mix_prev[NSPIRE_MIX_PIXELS] __attribute__((aligned(32)));
 static u16 mix_out[GBA_SCREEN_WIDTH * GBA_SCREEN_HEIGHT] __attribute__((aligned(4)));
 
+/* The blended pictures' interframe blending: the core draws frames into
+ * frame_a (its own buffer) and frame_b in turn, and prev_frame is the one
+ * drawn before (NULL: none yet). Reading the previous frame where it was
+ * drawn saves copying each frame (the old way, still used by the other
+ * pictures with mix_prev): a whole frame written back to memory. */
+static u16 frame_b[NSPIRE_MIX_PIXELS] __attribute__((aligned(32)));
+static u16 *frame_a;
+static const u16 *prev_frame;
+
+static int blends_frames_itself(void);
+
 void nspire_video_mix_reset(void)
 {
   memset(mix_prev, 0xFF, sizeof(mix_prev));
+  prev_frame = NULL;
+}
+
+void nspire_video_frame_start(void)
+{
+  if (!gba_screen_pixels || !nspire_frame_mix_choice || !blends_frames_itself())
+  {
+    prev_frame = NULL;
+    return;
+  }
+  if (!frame_a)
+    frame_a = gba_screen_pixels;
+  prev_frame = gba_screen_pixels;
+  gba_screen_pixels = gba_screen_pixels == frame_b ? frame_a : frame_b;
 }
 
 /* Interframe blending: the same 50:50 packed RGB565 mix as libretro's
@@ -235,7 +260,7 @@ static void mix_frames(void)
 static void present_portrait(const u16 *frame, u32 pitch)
 {
   u16 *dst = (u16 *)nspire_screen;
-  u16 *prev = nspire_frame_mix_choice ? mix_prev : NULL;
+  const u16 *prev = nspire_frame_mix_choice ? prev_frame : NULL;
 
   switch (screen_scale)
   {

@@ -38,6 +38,7 @@ extern u16 nspire_fps_color;
 void init_gamepak_buffer(void);
 void nspire_present_frame(void);
 void nspire_video_mix_reset(void);
+void nspire_video_frame_start(void);
 
 /* Called at the start of every frame; the model splits its count here. */
 void __attribute__((noinline)) perf_frame_mark(void)
@@ -256,6 +257,8 @@ int main(int argc, char **argv)
   {
     perf_frame_mark();
     skip_next_frame = draw_every == 0 || (frame % draw_every) != 0;
+    if (!skip_next_frame)
+      nspire_video_frame_start();
     write_ioreg(REG_P1, (~keys_at(frame)) & 0x3FF);
     execute_arm_translate(execute_cycles);
     if (nspire_bad_jump)

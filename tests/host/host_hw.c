@@ -457,16 +457,16 @@ int __wrap_zip_read(struct zip_rom *zip, uint8_t *dst, uint32_t n)
 
 /* The blended pictures cost what turning as many pixels does (roughly so
  * on the calculator, tests/arm and nspire_blend.c). */
-void __real_nspire_blend_turn_aspect(uint16_t *dst, const uint16_t *src, uint16_t *prev);
-void __real_nspire_blend_turn_full(uint16_t *dst, const uint16_t *src, uint16_t *prev);
+void __real_nspire_blend_turn_aspect(uint16_t *dst, const uint16_t *src, const uint16_t *prev);
+void __real_nspire_blend_turn_full(uint16_t *dst, const uint16_t *src, const uint16_t *prev);
 
-void __wrap_nspire_blend_turn_aspect(uint16_t *dst, const uint16_t *src, uint16_t *prev)
+void __wrap_nspire_blend_turn_aspect(uint16_t *dst, const uint16_t *src, const uint16_t *prev)
 {
   __real_nspire_blend_turn_aspect(dst, src, prev);
   turn_cost(320 * 216);
 }
 
-void __wrap_nspire_blend_turn_full(uint16_t *dst, const uint16_t *src, uint16_t *prev)
+void __wrap_nspire_blend_turn_full(uint16_t *dst, const uint16_t *src, const uint16_t *prev)
 {
   __real_nspire_blend_turn_full(dst, src, prev);
   turn_cost(320 * 240);

@@ -73,8 +73,11 @@ $(BUILD)/test_%.o: %.c | $(BUILD)
 $(BUILD)/newlib_shim.o: newlib_shim.c | $(BUILD)
 	arm-none-eabi-gcc $(ARCH) -O2 -fno-builtin -c $< -o $@
 
+$(BUILD)/calc_blend_ref.o: blend_ref.c | $(BUILD)
+	nspire-gcc $(CALC_FLAGS) -c $< -o $@
+
 $(BUILD)/blend_test: $(BUILD)/test_blend_test.o $(BUILD)/calc_nspire_blend.o $(BUILD)/calc_nspire_turn.o \
-                     $(BUILD)/upscale_aspect.o $(BUILD)/newlib_shim.o
+                     $(BUILD)/calc_blend_ref.o $(BUILD)/upscale_aspect.o $(BUILD)/newlib_shim.o
 	arm-none-eabi-gcc $(ARCH) -specs=rdimon.specs $^ -o $@
 
 $(BUILD)/fill_test: $(BUILD)/test_fill_test.o $(BUILD)/scanline_fill16.o $(BUILD)/newlib_shim.o

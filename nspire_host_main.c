@@ -463,6 +463,8 @@ static void run_frame(void)
 
   rumble_frame_reset();
   nspire_frameskip_begin_frame();
+  if (!skip_next_frame)
+    nspire_video_frame_start();
 
 #ifdef HAVE_DYNAREC
   if (dynarec_enable)

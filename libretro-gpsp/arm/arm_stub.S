@@ -881,6 +881,25 @@ execute_load_builder(u16, 1, read_memory16 )
 execute_load_builder(s16, 1, read_memory16s)
 execute_load_builder(u32, 2, read_memory32 )
 
+@ Memory access dispatch, shared by all translated code (Nspire): the code
+@ calls one of these with "bl" instead of having the region lookup inline,
+@ which made a third of the translated code and cost instruction cache
+@ misses (16 KB on the ARM926). Same math as mem_calc_region in arm_emit.h
+@ (flags untouched, r9 as scratch: the handlers clobber it anyway), then on
+@ to the region's handler with lr still pointing at the PC word.
+@ r0: address (r1: value for stores)
+
+#define mem_dispatch(name, tblnum, abits)                                    ;defsymbl(name)                                                               ;  .if abits                                                                  ;  orr r2, r0, r0, lsl #(32 - abits)                                          ;  mov r2, r2, lsr #24                                                        ;  .else                                                                      ;  mov r2, r0, lsr #24                                                        ;  .endif                                                                     ;  rsb r9, r2, #15                                                            ;  orr r2, r2, r9, asr #31                                                    ;  add r2, r2, #((STORE_TBL_OFF + 68 * tblnum + 4) >> 2)                      ;  ldr pc, [reg_base, r2, lsl #2]                                             ;
+mem_dispatch(mem_dispatch_store_u8,      0, 0)
+mem_dispatch(mem_dispatch_store_u16,     1, 0)
+mem_dispatch(mem_dispatch_store_u32,     2, 0)
+mem_dispatch(mem_dispatch_store_u32_safe, 3, 0)
+mem_dispatch(mem_dispatch_load_u8,       4, 0)
+mem_dispatch(mem_dispatch_load_s8,       5, 0)
+mem_dispatch(mem_dispatch_load_u16,      6, 1)
+mem_dispatch(mem_dispatch_load_s16,      7, 1)
+mem_dispatch(mem_dispatch_load_u32,      8, 2)
+
 .data
 .align 4
 

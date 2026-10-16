@@ -102,20 +102,16 @@ static inline void store_3_words(u32 *d, u32 a, u32 b, u32 c)
 /* Source lines with interframe blending done, for the lines being scaled. */
 static u16 mixed_lines[4 * SRC_W] __attribute__((aligned(32)));
 
-/* Interframe blending of n lines from src (SRC_W a line) into mixed_lines;
- * prev (the previous frame's lines) gets this frame's. */
-static const u16 *mix_lines(const u16 *src, u16 *prev, u32 n)
+/* Interframe blending of n lines from src (SRC_W a line) with the previous
+ * frame's (prev) into mixed_lines. */
+static const u16 *mix_lines(const u16 *src, const u16 *prev, u32 n)
 {
-  const u32 *s = (const u32 *)src;
-  u32 *p = (u32 *)prev, *d = (u32 *)mixed_lines;
+  const u32 *s = (const u32 *)src, *p = (const u32 *)prev;
+  u32 *d = (u32 *)mixed_lines;
   u32 i;
 
   for (i = 0; i < n * SRC_W / 2; i++)
-  {
-    u32 c = s[i], o = p[i];
-    p[i] = c;
-    d[i] = average_up(c, o);
-  }
+    d[i] = average_up(s[i], p[i]);
   return mixed_lines;
 }
 
@@ -127,35 +123,78 @@ static const u16 *mix_lines(const u16 *src, u16 *prev, u32 n)
  * one line lower; the text bands are lines 0-11 and 228-239.) */
 #define ASPECT_TOP 12
 
-/* Source lines s, s + SRC_W, s + 2 SRC_W -> 4 picture lines, whose bottom
- * one is at position pos of each LCD line. */
-static void aspect_group(u16 *dst, const u16 *s, u32 pos)
+/* A source pixel of a word of two (the lower address in the low half),
+ * unpacked. */
+static inline u32 unpack_lo(u32 w)
 {
+  u32 t = w << 16;
+  return (t | (t >> 16)) & UNPACKED_MASK;
+}
+
+static inline u32 unpack_hi(u32 w)
+{
+  u32 t = w >> 16;
+  return (t | (t << 16)) & UNPACKED_MASK;
+}
+
+/* A 3x3 block of source pixels (columns a, b, c; rows 0-2, unpacked) -> its
+ * 4 picture columns of 4 pixels, each column's bottom two pixels, then its
+ * top two, at *d and the next 3 LCD lines. */
+static inline __attribute__((always_inline)) void aspect_block(u32 **dp, u32 a0, u32 a1, u32 a2,
+                                                                u32 b0, u32 b1, u32 b2,
+                                                                u32 c0, u32 c1, u32 c2)
+{
+  u32 *d = *dp;
+  store_2_words(d, pack_pair(a2, blend_3_5(a2, a1)), pack_pair(blend_3_5(a0, a1), a0));
+  d += DST_W / 2;
+  store_2_words(d, pack_pair(blend_3_5(a2, b2), blend_14_7_7_4(b1, b2, a1, a2)),
+                pack_pair(blend_14_7_7_4(b1, b0, a1, a0), blend_3_5(a0, b0)));
+  d += DST_W / 2;
+  store_2_words(d, pack_pair(blend_3_5(c2, b2), blend_14_7_7_4(b1, b2, c1, c2)),
+                pack_pair(blend_14_7_7_4(b1, b0, c1, c0), blend_3_5(c0, b0)));
+  d += DST_W / 2;
+  store_2_words(d, pack_pair(c2, blend_3_5(c2, c1)), pack_pair(blend_3_5(c0, c1), c0));
+  d += DST_W / 2;
+  *dp = d;
+}
+
+/* Source lines s, s + SRC_W, s + 2 SRC_W (with interframe blending: averaged
+ * with the previous frame's, p) -> 4 picture lines, whose bottom one is at
+ * position pos of each LCD line. Six source columns at a time: three words
+ * a line, two 3x3 blocks. */
+static inline __attribute__((always_inline)) void aspect_group(u16 *dst, const u16 *s, const u16 *p,
+                                                               u32 pos, int mix)
+{
+  const u32 *r = (const u32 *)s, *q = (const u32 *)p;
   u32 *d = (u32 *)(dst + pos);
   u32 x;
 
-  for (x = 0; x < GBA_SCREEN_WIDTH; x += 3, s += 3)
+#define ROW(n) (SRC_W / 2 * (n))
+  for (x = 0; x < GBA_SCREEN_WIDTH; x += 6, r += 3, q += 3)
   {
-    u32 a0 = unpack(s[0]), a1 = unpack(s[SRC_W]), a2 = unpack(s[2 * SRC_W]);
-    u32 b0 = unpack(s[1]), b1 = unpack(s[SRC_W + 1]), b2 = unpack(s[2 * SRC_W + 1]);
-    u32 c0, c1, c2;
-
-    /* Each column: its bottom two pixels, then its top two. */
-    store_2_words(d, pack_pair(a2, blend_3_5(a2, a1)), pack_pair(blend_3_5(a0, a1), a0));
-    d += DST_W / 2;
-    store_2_words(d, pack_pair(blend_3_5(a2, b2), blend_14_7_7_4(b1, b2, a1, a2)),
-                  pack_pair(blend_14_7_7_4(b1, b0, a1, a0), blend_3_5(a0, b0)));
-    d += DST_W / 2;
-
-    c0 = unpack(s[2]);
-    c1 = unpack(s[SRC_W + 2]);
-    c2 = unpack(s[2 * SRC_W + 2]);
-    store_2_words(d, pack_pair(blend_3_5(c2, b2), blend_14_7_7_4(b1, b2, c1, c2)),
-                  pack_pair(blend_14_7_7_4(b1, b0, c1, c0), blend_3_5(c0, b0)));
-    d += DST_W / 2;
-    store_2_words(d, pack_pair(c2, blend_3_5(c2, c1)), pack_pair(blend_3_5(c0, c1), c0));
-    d += DST_W / 2;
+    u32 w00 = r[0], w01 = r[1], w02 = r[2];
+    u32 w10 = r[ROW(1)], w11 = r[ROW(1) + 1], w12 = r[ROW(1) + 2];
+    u32 w20 = r[ROW(2)], w21 = r[ROW(2) + 1], w22 = r[ROW(2) + 2];
+    if (mix)
+    {
+      w00 = average_up(w00, q[0]);
+      w01 = average_up(w01, q[1]);
+      w02 = average_up(w02, q[2]);
+      w10 = average_up(w10, q[ROW(1)]);
+      w11 = average_up(w11, q[ROW(1) + 1]);
+      w12 = average_up(w12, q[ROW(1) + 2]);
+      w20 = average_up(w20, q[ROW(2)]);
+      w21 = average_up(w21, q[ROW(2) + 1]);
+      w22 = average_up(w22, q[ROW(2) + 2]);
+    }
+    aspect_block(&d, unpack_lo(w00), unpack_lo(w10), unpack_lo(w20),
+                 unpack_hi(w00), unpack_hi(w10), unpack_hi(w20),
+                 unpack_lo(w01), unpack_lo(w11), unpack_lo(w21));
+    aspect_block(&d, unpack_hi(w01), unpack_hi(w11), unpack_hi(w21),
+                 unpack_lo(w02), unpack_lo(w12), unpack_lo(w22),
+                 unpack_hi(w02), unpack_hi(w12), unpack_hi(w22));
   }
+#undef ROW
 }
 
 /* The last source line (blended across only) at landscape line 224, and
@@ -179,25 +218,38 @@ static void aspect_last_line(u16 *dst, const u16 *s)
   }
 }
 
-/* The scaled/blended 3:2 picture of src (240x160, GBA_SCREEN_PITCH pixels a
- * line), turned into dst at landscape lines 12-224 (225-227 black). With
- * prev, frames are blended with the previous one, which prev holds (it gets
- * this one). */
-void nspire_blend_turn_aspect(u16 *dst, const u16 *src, u16 *prev)
+static void aspect_groups_mixed(u16 *dst, const u16 *src, const u16 *prev)
 {
   u32 group;
-
   for (group = 0; group < GBA_SCREEN_HEIGHT / 3; group++)
-  {
-    const u16 *s = src + group * 3 * SRC_W;
-    if (prev)
-      s = mix_lines(s, prev + group * 3 * SRC_W, 3);
-    aspect_group(dst, s, DST_W - 1 - (ASPECT_TOP + group * 4 + 3));
-  }
-  src += (GBA_SCREEN_HEIGHT - 1) * SRC_W;
+    aspect_group(dst, src + group * 3 * SRC_W, prev + group * 3 * SRC_W,
+                 DST_W - 1 - (ASPECT_TOP + group * 4 + 3), 1);
+}
+
+static void aspect_groups(u16 *dst, const u16 *src)
+{
+  u32 group;
+  for (group = 0; group < GBA_SCREEN_HEIGHT / 3; group++)
+    aspect_group(dst, src + group * 3 * SRC_W, src, DST_W - 1 - (ASPECT_TOP + group * 4 + 3), 0);
+}
+
+/* The scaled/blended 3:2 picture of src (240x160, GBA_SCREEN_PITCH pixels a
+ * line), turned into dst at landscape lines 12-224 (225-227 black). With
+ * prev (the previous frame, only read), frames are blended with it, in the
+ * same pass: the source is read once and nothing but the picture is
+ * written. */
+void nspire_blend_turn_aspect(u16 *dst, const u16 *src, const u16 *prev)
+{
+  const u16 *last = src + (GBA_SCREEN_HEIGHT - 1) * SRC_W;
+
   if (prev)
-    src = mix_lines(src, prev + (GBA_SCREEN_HEIGHT - 1) * SRC_W, 1);
-  aspect_last_line(dst, src);
+  {
+    aspect_groups_mixed(dst, src, prev);
+    last = mix_lines(last, prev + (GBA_SCREEN_HEIGHT - 1) * SRC_W, 1);
+  }
+  else
+    aspect_groups(dst, src);
+  aspect_last_line(dst, last);
 }
 
 /* ---- fullscreen/blended ---- */
@@ -237,7 +289,7 @@ static void full_group(u16 *dst, const u16 *s, u32 pos)
 
 /* The fullscreen/blended picture of src, turned into all of dst. prev as in
  * nspire_blend_turn_aspect. */
-void nspire_blend_turn_full(u16 *dst, const u16 *src, u16 *prev)
+void nspire_blend_turn_full(u16 *dst, const u16 *src, const u16 *prev)
 {
   u32 group;
 
