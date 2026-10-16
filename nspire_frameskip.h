@@ -9,7 +9,8 @@ enum nspire_pace_mode
 {
   PACE_NORMAL,              /* real speed, frameskip as set */
   PACE_UNCAPPED_DRAW_ALL,   /* speed test: as fast as it goes, every frame drawn */
-  PACE_UNCAPPED_DRAW_NONE   /* speed test: as fast as it goes, nothing drawn */
+  PACE_UNCAPPED_DRAW_NONE,  /* speed test: as fast as it goes, nothing drawn */
+  PACE_FAST_FORWARD         /* speed test: fast forward with frameskip off */
 };
 extern enum nspire_pace_mode nspire_pace;
 

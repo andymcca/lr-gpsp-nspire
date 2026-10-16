@@ -608,12 +608,13 @@ static const struct speed_test_part speed_test_parts[] =
   { "Normal play, frameskip off", PACE_NORMAL, 10 },
   { "No speed limit, every frame drawn", PACE_UNCAPPED_DRAW_ALL, 5 },
   { "No speed limit, nothing drawn", PACE_UNCAPPED_DRAW_NONE, 5 },
+  { "Fast forward, frameskip off", PACE_FAST_FORWARD, 5 },
 };
 
 #define SPEED_TEST_PARTS (int)(sizeof(speed_test_parts) / sizeof(speed_test_parts[0]))
 #define TENTHS(v) (unsigned)((v) / 10), (unsigned)((v) % 10)
 
-/* Runs the game from where it is in three ways and reports frames per
+/* Runs the game from where it is in four ways and reports frames per
  * second and where each frame's time goes; the game is put back as it was.
  * Called from the menu. */
 void nspire_speed_test(void)
@@ -723,8 +724,12 @@ void nspire_speed_test(void)
     for (i = 0; i < done; i++)
     {
       print_string(speed_test_parts[i].name, white, 0, 10, 60 + i * 34);
-      snprintf(line, sizeof(line), "%u.%u fps  cpu %u.%u  gfx %u.%u  out %u.%u", TENTHS(stats[i].game_fps),
-               TENTHS(stats[i].cpu_ms), TENTHS(stats[i].render_ms), TENTHS(stats[i].output_ms));
+      if (speed_test_parts[i].pace == PACE_FAST_FORWARD)
+        snprintf(line, sizeof(line), "%u.%u game frames a second, %u.%u drawn", TENTHS(stats[i].game_fps),
+                 TENTHS(stats[i].drawn_fps));
+      else
+        snprintf(line, sizeof(line), "%u.%u fps  cpu %u.%u  gfx %u.%u  out %u.%u", TENTHS(stats[i].game_fps),
+                 TENTHS(stats[i].cpu_ms), TENTHS(stats[i].render_ms), TENTHS(stats[i].output_ms));
       print_string(line, dim, 0, 20, 72 + i * 34);
     }
     print_string("Saved to gpsp_results.txt. Press a key.", dim, 0, 10, 220);

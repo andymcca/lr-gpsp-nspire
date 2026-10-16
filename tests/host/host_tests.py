@@ -92,6 +92,19 @@ def qol1_config(scale, cpu):
     return o
 
 
+def owner_config():
+    """The owner's gpsp_qol.cfg.tns, as read off the calculator on
+    2026-10-14 (QOL3): scaled/blended 3:2, interframe blending, frameskip
+    off, no sprite limit, video.cc, Partial SMC, 16 MB ROM buffer, the FPS
+    counter on, brightness 9, gpSP's default keys."""
+    keys = [0x67, 0x57, 0x28, 0x24, 0x5a, 0x52, 0x5b, 0x64, 0x79, 0x7a, 0x66, 0x41, 0x31, 0x17, 0x22]
+    o = [1, 1, 0, 0, 1, 0, 4] + keys + [0, 1, 2, 1, 0xFF000000, 0, 1, 1, 1, 16, 0, 1, 0, 0, 0, 0x334C4F51]
+    o += keys + [0, 0x54, 0x56, 0, 0]          # actions 0-19: ) and ( for the slots
+    o += [0, 1, 1, 0, 1, 9, 0x63, 0x53, 1] + [0] * 5
+    assert len(o) == 72
+    return o
+
+
 # ---- Screenshots ----
 
 class Shot:
@@ -1026,7 +1039,7 @@ press up
 wait 0.3
 shot option
 press enter
-wait 23
+wait 28
 shot results
 press enter
 wait 1
@@ -1040,7 +1053,11 @@ quit
     check(os.path.exists(path), "speed test: gpsp_results.txt written")
     if os.path.exists(path):
         text = open(path).read()
-        check("Normal play" in text and "nothing drawn" in text, "speed test: all three parts")
+        check("Normal play" in text and "nothing drawn" in text and "Fast forward" in text,
+              "speed test: all four parts")
+        ff = [l for l in text.split("\n") if l.startswith("Fast forward")]
+        game = text.split("Fast forward")[1].split("game ")[1].split(" fps")[0] if ff else "0"
+        check(float(game) >= 119, "speed test: fast forward at 120 game frames a second or more: %s" % game)
 
 
 def test_hotkeys_in_menu_keys():
@@ -1243,6 +1260,58 @@ quit
     check(ff > 90, "fast forward: %d frames a second" % ff)
     box = r.shot("ff").box(0, 12)
     check(box is not None and box[2] < 60, "fast forward: the counter as drawn/expected, %s" % (box,))
+
+
+def test_fast_forward_pace():
+    """Fast forward with frameskip off (the owner's settings): the game runs
+    at twice its speed or more, pictures are drawn at most at the LCD's pace
+    (one per refresh; more would never be shown), and fewer when drawing
+    them would hold the game below twice its speed. The counter shows game
+    frames against 120."""
+    def ff_run(name, costs):
+        return Run(name, files={"gpsp_qol.cfg.tns": owner_config()}).run(costs + """
+wait 1
+press enter
+wait 1
+note normal_a
+wait 2
+note normal_b
+press F
+wait 1
+note ff_a
+wait 2
+note ff_b
+shot counter
+press F
+wait 1
+note back_a
+wait 1
+note back_b
+quit
+""")
+
+    # Every frame drawn would take 5 + 4 + 4 ms (77 a second): fast forward
+    # has to leave pictures out to keep 120 game frames a second.
+    heavy = ff_run("ff_heavy", "cost frame 5\ncost line 25\ncost turn 4.5\ncost touchpad 0.4\n")
+    n = heavy.notes
+    game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
+    shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
+    check(game >= 119, "fast forward, heavy game: %.1f game frames a second (120 or more)" % game)
+    check(20 <= shown <= 61, "fast forward, heavy game: %.1f pictures a second" % shown)
+    normal = (n["normal_b"]["frame"] - n["normal_a"]["frame"]) / 2.0
+    check(58 <= normal <= 61, "fast forward, heavy game: normal speed before: %.1f" % normal)
+    back = n["back_b"]["frame"] - n["back_a"]["frame"]
+    check(57 <= back <= 61, "fast forward, heavy game: normal speed after: %d" % back)
+    box = heavy.shot("counter").box(0, 12)
+    check(box is not None and 30 < box[2] < 60, "fast forward: the counter, game frames/120: %s" % (box,))
+
+    # A light game: as fast as it goes, but no more than a picture per refresh.
+    light = ff_run("ff_light", "cost frame 2\ncost line 10\ncost turn 2\ncost touchpad 0.4\n")
+    n = light.notes
+    game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
+    shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
+    check(game >= 250, "fast forward, light game: %.1f game frames a second" % game)
+    check(50 <= shown <= 61, "fast forward, light game: %.1f pictures a second (one per refresh)" % shown)
 
 
 def test_blended():
@@ -1551,7 +1620,7 @@ def test_every_menu_line():
 TESTS = [test_play, test_menu, test_menu_slow_game, test_old_settings, test_unscaled_chosen,
          test_brightness, test_states, test_number_keys, test_move_and_sort, test_speed_test,
          test_hotkeys_in_menu_keys, test_folders, test_gbz, test_menu_load_and_exit, test_frameskip,
-         test_fps_counter_and_fast_forward, test_blended, test_loading_screen, test_zipped_game, test_damaged_rom,
+         test_fps_counter_and_fast_forward, test_fast_forward_pace, test_blended, test_loading_screen, test_zipped_game, test_damaged_rom,
          test_slot_keys, test_save_manager, test_every_menu_line, test_states_from_older_builds,
          test_file_types, test_new_calculator, test_no_gba_folder, test_old_layout, test_old_saves_folder,
          test_rom_manager]

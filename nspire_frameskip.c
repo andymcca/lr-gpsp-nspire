@@ -21,13 +21,23 @@
  * the 32768 Hz timer that is 280896 * 32768 / 2^24 * 2^16 = 280896 * 128. */
 #define FRAME_PERIOD (280896u * 128u)
 #define FRAME_TICKS  (FRAME_PERIOD >> 16)
-/* Fast forward draws one frame in this many (as gpSP always did). */
+/* Fast forward draws one frame in this many (as gpSP always did), unless
+ * frameskip is off. */
 #define FAST_FORWARD_DRAW_EVERY 5
+/* Fast forward with frameskip off: the game runs as fast as it can, and is
+ * kept at twice its speed or more by drawing fewer pictures when drawing
+ * them all would slow it down: frames are due every 0.48 GBA frame times
+ * (124 a second, so the counter shows 120 or more), and at least one in
+ * FAST_FORWARD_MAX_SKIP + 1 frames is drawn. */
+#define FAST_FORWARD_PERIOD (FRAME_PERIOD / 25u * 12u)
+#define FAST_FORWARD_MAX_SKIP 7
 
 enum nspire_pace_mode nspire_pace = PACE_NORMAL;
 
 static u32 next_frame, next_frame_frac;
 static u32 skipped_frames, manual_counter, fast_forward_counter;
+static u32 ff_last_picture, ff_next, ff_next_frac;
+static int ff_started;
 
 struct nspire_perf nspire_perf_totals;
 static struct nspire_perf perf_window;   /* totals at the last counter update */
@@ -46,6 +56,7 @@ void nspire_reset_timing(void)
   next_frame = nspire_ticks();
   next_frame_frac = 0;
   skipped_frames = 0;
+  ff_started = 0;
   fps_started = 0;
   memset(&nspire_perf_totals, 0, sizeof(nspire_perf_totals));
   nspire_perf_totals.start = next_frame;
@@ -110,17 +121,65 @@ void nspire_perf_log_flush(void)
   perf_log_count = 0;
 }
 
+/* Fast forward with frameskip off counts game frames against twice the
+ * GBA's speed (see fast_forward_draw). */
+static int counts_game_frames(void)
+{
+  return nspire_pace == PACE_FAST_FORWARD ||
+         (nspire_pace == PACE_NORMAL && !synchronize_flag && current_frameskip_type == no_frameskip);
+}
+
 /* Frames drawn per second at full speed with this frameskip; in fast
- * forward, at normal speed (it draws one frame in FAST_FORWARD_DRAW_EVERY,
- * or all of them with frameskip off), as PocketSNES counts it. */
+ * forward, at normal speed (it draws one frame in FAST_FORWARD_DRAW_EVERY),
+ * as PocketSNES counts it; with frameskip off, game frames at twice the
+ * speed. */
 static u32 fps_expected(void)
 {
   u32 n = 0;
+  if (counts_game_frames())
+    return 120;
   if (!synchronize_flag)
-    n = current_frameskip_type == no_frameskip ? 0 : FAST_FORWARD_DRAW_EVERY - 1;
+    n = FAST_FORWARD_DRAW_EVERY - 1;
   else if (current_frameskip_type == manual_frameskip)
     n = frameskip_value > 99 ? 99 : frameskip_value;
   return (5973u + 50u * (n + 1u)) / (100u * (n + 1u));
+}
+
+/* Fast forward with frameskip off: whether this frame is drawn. A picture
+ * is drawn once the LCD has taken the last one (nspire_flip_taken: it takes
+ * one per refresh, so pictures drawn faster would never be shown), or two
+ * refreshes after it whatever the LCD says; and not while the game is
+ * behind its fast forward speed (ff_next, when this frame is due, with at
+ * most a frame's lead or 4 frames' lag kept), unless FAST_FORWARD_MAX_SKIP
+ * frames in a row went undrawn. */
+static int fast_forward_draw(void)
+{
+  u32 now = nspire_ticks();
+  s32 ahead;
+  int draw;
+
+  if (!ff_started)
+  {
+    ff_started = 1;
+    ff_last_picture = now - FRAME_TICKS * 2;
+    ff_next = now;
+    ff_next_frac = 0;
+    skipped_frames = 0;
+  }
+  ff_next_frac += FAST_FORWARD_PERIOD;
+  ff_next += ff_next_frac >> 16;
+  ff_next_frac &= 0xFFFF;
+  ahead = (s32)(ff_next - now);
+  if (ahead > (s32)FRAME_TICKS)
+    ff_next = now + FRAME_TICKS;
+  else if (ahead < -(s32)(FRAME_TICKS * 4))
+    ff_next = now - FRAME_TICKS * 4;
+
+  draw = (nspire_flip_taken() || now - ff_last_picture >= FRAME_TICKS * 2) &&
+         (ahead >= 0 || skipped_frames >= FAST_FORWARD_MAX_SKIP);
+  if (draw)
+    ff_last_picture = now;
+  return draw;
 }
 
 /* The counters' text, once a second (detailed) or twice (frames). */
@@ -178,8 +237,8 @@ void nspire_frameskip_begin_frame(void)
       draw = 1;
     else if (nspire_pace == PACE_UNCAPPED_DRAW_NONE)
       draw = 0;
-    else if (current_frameskip_type == no_frameskip)
-      draw = 1;
+    else if (nspire_pace == PACE_FAST_FORWARD || current_frameskip_type == no_frameskip)
+      draw = fast_forward_draw();
     else
     {
       draw = fast_forward_counter == 0;
@@ -241,8 +300,12 @@ void nspire_frameskip_end_frame(u32 output_ticks)
   {
     nspire_perf_totals.drawn++;
     nspire_perf_totals.output += output_ticks;
+  }
 
-    /* Frames drawn per second, over half a second. */
+  /* Frames drawn per second (game frames in fast forward with frameskip
+   * off), over half a second. */
+  if (!skip_next_frame || counts_game_frames())
+  {
     if (!fps_started)
     {
       fps_started = 1;
