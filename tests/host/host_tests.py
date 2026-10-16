@@ -1318,14 +1318,13 @@ def test_fast_forward_max_speed():
     """Graphics > Fast forward max speed: 1.1x to 10.0x in tenths, then
     unlimited (the default). Fast forward holds the speed chosen (waiting
     when it's ahead), normal play is untouched, and the menu's choice is
-    saved (settings word 67: tenths, 0 for unlimited)."""
-    def limited(name, tenths):
+    saved (settings word 67: tenths, 0 for unlimited). A speed the game
+    can't reach is only a cap: it runs as fast as it can with every picture
+    the LCD shows drawn (no pictures left out to reach it)."""
+    def limited(name, tenths, costs="cost frame 2\ncost line 10\ncost turn 2\n"):
         cfg = owner_config()
         cfg[67] = tenths
-        return Run(name, files={"gpsp_qol.cfg.tns": cfg}).run("""cost frame 2
-cost line 10
-cost turn 2
-cost touchpad 0.4
+        return Run(name, files={"gpsp_qol.cfg.tns": cfg}).run(costs + """cost touchpad 0.4
 wait 1
 press enter
 wait 1
@@ -1349,6 +1348,16 @@ quit
         check(low <= game <= high, "fast forward max %d.%dx: %.1f game frames a second" % (tenths // 10, tenths % 10, game))
         check(40 <= shown <= 61, "fast forward max %d.%dx: %.1f pictures a second" % (tenths // 10, tenths % 10, shown))
         check(58 <= normal <= 61, "fast forward max %d.%dx: normal play %.1f" % (tenths // 10, tenths % 10, normal))
+
+    # 3.0x out of reach (5 ms a frame running, 8 more drawing): pictures
+    # aren't left out for it, so it draws one per refresh, as fast as that
+    # leaves room for.
+    r = limited("ff_max_unreachable", 30, "cost frame 5\ncost line 25\ncost turn 4.5\n")
+    n = r.notes
+    game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
+    shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
+    check(shown >= 50, "fast forward max 3.0x out of reach: %.1f pictures a second (all the LCD shows)" % shown)
+    check(85 <= game < 179, "fast forward max 3.0x out of reach: %.1f game frames a second" % game)
 
     # The menu: Graphics, line 12; left from unlimited is 10.0x.
     r = Run("ff_max_menu", files={"gpsp_qol.cfg.tns": owner_config()}).run("""wait 1

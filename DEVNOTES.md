@@ -410,9 +410,11 @@ Done (estimates, owner's Emerald route state / grass-to-battle replay):
 * Fast forward max speed (Graphics line 12, the owner's request): 1.1x to
   10.0x in tenths, then unlimited (default; `nspire_ff_max` is the menu's
   index, settings word 67 keeps tenths, 0 = unlimited, also per game).
-  With a top speed frames wait for their time (`fast_forward_pace`) and
-  pictures make way when the game falls behind it; unlimited paces pictures
-  against 124 a second. In fast forward the counter shows game frames / 60
+  With a top speed frames wait for their time (`fast_forward_pace`); it's
+  only a cap: a game that can't reach it runs as fast as it can with every
+  picture drawn (the owner: "if not enough frames it just draws the maximum
+  and doesnt try to reach that speed"). Unlimited leaves pictures out while
+  the game is below 124 a second. In fast forward the counter shows game frames / 60
   (the owner: "still out of 60"), whatever the frameskip. The speed test's
   fast forward ignores the top speed. Host test fast_forward_max_speed.
 * Dynarec: memory accesses `bl` a shared region-lookup stub
