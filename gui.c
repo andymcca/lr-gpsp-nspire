@@ -2166,9 +2166,9 @@ u32 menu(u16 *original_screen)
      "see corruption.", 8),
     string_selection_option(NULL, "Show FPS counter",
      nspire_fps_overlay_options, &nspire_fps_overlay, 3,
-     "Frames drawn a second / the most there can be.\n"
-     "Detailed: ms per frame running the game, drawing,\n"
-     "showing it (also logged to gpsp_perf.txt).", 9),
+     "Pictures a second / the most (fast forward: game\n"
+     "frames / 60). Detailed: ms per frame running the\n"
+     "game, drawing, showing it (and gpsp_perf.txt).", 9),
     string_selection_option(NULL, "GBA blending (BLDCNT)",
      nspire_gba_blend_options, &nspire_gba_blend_off, 2,
      "On: see-through layers, fades and sprites drawn\n"
@@ -2179,6 +2179,11 @@ u32 menu(u16 *original_screen)
      "libretro video.cc is the default renderer.\n"
      "legacy old_video/video.c can be faster in some\n"
      "scenes (uses video_blend.S).", 11),
+    string_selection_option(NULL, "Fast forward max speed",
+     (u8 **)nspire_ff_max_names, &nspire_ff_max, NSPIRE_FF_CHOICES,
+     "Fast forward's top speed, in steps of 0.1x up to\n"
+     "10x; unlimited: as fast as the game can run. It\n"
+     "keeps this speed by drawing fewer pictures.", 12),
 #endif
 #elif !defined(GP2X_BUILD)
     string_selection_option(NULL, "Frameskip type", frameskip_options,
@@ -2235,7 +2240,7 @@ u32 menu(u16 *original_screen)
 #endif
 #if defined(NSPIRE_LIBRETRO)
     action_option(menu_speed_test, NULL, "Run speed test",
-     "Runs the game from here for 20 seconds, three\n"
+     "Runs the game from here for 25 seconds, four\n"
      "ways, and shows where the time goes; then it's\n"
      "put back. Results: gpsp_results.txt.", 13),
     submenu_option(NULL, "Back", "Return to the main menu.", 15)

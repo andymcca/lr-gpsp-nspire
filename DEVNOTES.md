@@ -403,9 +403,18 @@ the speed test's new fast forward part is the check.
 Done (estimates, owner's Emerald route state / grass-to-battle replay):
 * Fast forward with frameskip off draws a picture only when the LCD has
   taken the last one (`nspire_flip_taken`; pictures drawn faster are never
-  shown) and skips pictures while the game is behind 124 frames a second
-  (at least one in 8 drawn). The counter shows game frames/120 there. Game
-  frames are never skipped. Speed test part 4 runs it.
+  shown) and skips pictures while the game is behind its pace (at least one
+  in 8 drawn). Game frames are never skipped. Speed test part 4 runs it.
+  Seen on the calculator (2026-10-15): about 130 game frames a second in
+  Emerald's overworld.
+* Fast forward max speed (Graphics line 12, the owner's request): 1.1x to
+  10.0x in tenths, then unlimited (default; `nspire_ff_max` is the menu's
+  index, settings word 67 keeps tenths, 0 = unlimited, also per game).
+  With a top speed frames wait for their time (`fast_forward_pace`) and
+  pictures make way when the game falls behind it; unlimited paces pictures
+  against 124 a second. In fast forward the counter shows game frames / 60
+  (the owner: "still out of 60"), whatever the frameskip. The speed test's
+  fast forward ignores the top speed. Host test fast_forward_max_speed.
 * Dynarec: memory accesses `bl` a shared region-lookup stub
   (`mem_dispatch_*`) and block exits `bl` a shared cycle check
   (`arm_check_update_*`): translated code 488 -> 315 KB, game time

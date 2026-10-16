@@ -14,6 +14,13 @@ enum nspire_pace_mode
 };
 extern enum nspire_pace_mode nspire_pace;
 
+/* Fast forward's top speed (the Graphics menu's choice): index i is
+ * (i + 11) / 10 times normal speed, NSPIRE_FF_UNLIMITED none. */
+#define NSPIRE_FF_CHOICES 91
+#define NSPIRE_FF_UNLIMITED 90
+extern u32 nspire_ff_max;
+extern const char *const nspire_ff_max_names[NSPIRE_FF_CHOICES];
+
 void nspire_frameskip_reset(void);
 /* Before a frame: decides whether it is drawn (sets skip_next_frame) and
  * waits until it is due. */

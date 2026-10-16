@@ -1267,7 +1267,7 @@ def test_fast_forward_pace():
     at twice its speed or more, pictures are drawn at most at the LCD's pace
     (one per refresh; more would never be shown), and fewer when drawing
     them would hold the game below twice its speed. The counter shows game
-    frames against 120."""
+    frames against 60."""
     def ff_run(name, costs):
         return Run(name, files={"gpsp_qol.cfg.tns": owner_config()}).run(costs + """
 wait 1
@@ -1303,7 +1303,7 @@ quit
     back = n["back_b"]["frame"] - n["back_a"]["frame"]
     check(57 <= back <= 61, "fast forward, heavy game: normal speed after: %d" % back)
     box = heavy.shot("counter").box(0, 12)
-    check(box is not None and 30 < box[2] < 60, "fast forward: the counter, game frames/120: %s" % (box,))
+    check(box is not None and 30 < box[2] < 60, "fast forward: the counter, game frames/60: %s" % (box,))
 
     # A light game: as fast as it goes, but no more than a picture per refresh.
     light = ff_run("ff_light", "cost frame 2\ncost line 10\ncost turn 2\ncost touchpad 0.4\n")
@@ -1312,6 +1312,65 @@ quit
     shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
     check(game >= 250, "fast forward, light game: %.1f game frames a second" % game)
     check(50 <= shown <= 61, "fast forward, light game: %.1f pictures a second (one per refresh)" % shown)
+
+
+def test_fast_forward_max_speed():
+    """Graphics > Fast forward max speed: 1.1x to 10.0x in tenths, then
+    unlimited (the default). Fast forward holds the speed chosen (waiting
+    when it's ahead), normal play is untouched, and the menu's choice is
+    saved (settings word 67: tenths, 0 for unlimited)."""
+    def limited(name, tenths):
+        cfg = owner_config()
+        cfg[67] = tenths
+        return Run(name, files={"gpsp_qol.cfg.tns": cfg}).run("""cost frame 2
+cost line 10
+cost turn 2
+cost touchpad 0.4
+wait 1
+press enter
+wait 1
+note normal_a
+wait 2
+note normal_b
+press F
+wait 1
+note ff_a
+wait 2
+note ff_b
+quit
+""")
+
+    for tenths, low, high in ((15, 88, 91), (11, 64.5, 67), (30, 177, 181)):
+        r = limited("ff_max_%d" % tenths, tenths)
+        n = r.notes
+        game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
+        shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
+        normal = (n["normal_b"]["frame"] - n["normal_a"]["frame"]) / 2.0
+        check(low <= game <= high, "fast forward max %d.%dx: %.1f game frames a second" % (tenths // 10, tenths % 10, game))
+        check(40 <= shown <= 61, "fast forward max %d.%dx: %.1f pictures a second" % (tenths // 10, tenths % 10, shown))
+        check(58 <= normal <= 61, "fast forward max %d.%dx: normal play %.1f" % (tenths // 10, tenths % 10, normal))
+
+    # The menu: Graphics, line 12; left from unlimited is 10.0x.
+    r = Run("ff_max_menu", files={"gpsp_qol.cfg.tns": owner_config()}).run("""wait 1
+press enter
+wait 1
+press menu
+wait 0.3
+press enter
+wait 0.3
+""" + "press down\n" * 9 + """wait 0.2
+shot unlimited
+press left
+wait 0.2
+shot ten
+press esc
+press esc
+wait 1
+quit
+""")
+    check(r.shot("unlimited").active_menu_line() == 12, "fast forward max speed: on line 12 of Graphics")
+    words = read_words(r.save("gpsp_qol.cfg.tns"))
+    check(words[67] == 100, "fast forward max speed: 10.0x saved as 100 (word 67 is %d)" % words[67])
 
 
 def test_blended():
@@ -1595,7 +1654,7 @@ def test_every_menu_line():
     options (gui.c checks in the PC build and complains on stderr), and the
     highlight is on it."""
     lines = ["wait 1", "press enter", "wait 1.5", "press menu", "wait 0.3"]
-    menus = (("graphics", 0, 11, [2, 3, 5, 6, 7, 8, 9, 10, 11, 13, 15]),
+    menus = (("graphics", 0, 12, [2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15]),
              ("emulator", 1, 9, [0, 2, 3, 4, 5, 6, 7, 9, 13]),
              ("input", 5, 25, None),
              ("cheats", 6, 16, list(range(10)) + [10, 11, 12, 13, 14, 15]))
@@ -1620,7 +1679,7 @@ def test_every_menu_line():
 TESTS = [test_play, test_menu, test_menu_slow_game, test_old_settings, test_unscaled_chosen,
          test_brightness, test_states, test_number_keys, test_move_and_sort, test_speed_test,
          test_hotkeys_in_menu_keys, test_folders, test_gbz, test_menu_load_and_exit, test_frameskip,
-         test_fps_counter_and_fast_forward, test_fast_forward_pace, test_blended, test_loading_screen, test_zipped_game, test_damaged_rom,
+         test_fps_counter_and_fast_forward, test_fast_forward_pace, test_fast_forward_max_speed, test_blended, test_loading_screen, test_zipped_game, test_damaged_rom,
          test_slot_keys, test_save_manager, test_every_menu_line, test_states_from_older_builds,
          test_file_types, test_new_calculator, test_no_gba_folder, test_old_layout, test_old_saves_folder,
          test_rom_manager]

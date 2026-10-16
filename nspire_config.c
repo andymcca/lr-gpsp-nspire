@@ -19,7 +19,9 @@
  *   63      screen brightness (0 the calculator's own, 1-10)
  *   64-65   the key bindings of actions 20-21 (brightness up, down)
  *   66      compress saves (1, the default) or not
- *   67-71   0 (room for more)
+ *   67      fast forward's top speed in tenths (11-100: 1.1x-10.0x), 0
+ *           unlimited (the default, and what older files have)
+ *   68-71   0 (room for more)
  *
  * Files from older builds, and from the first QoL build ("QOL1", without
  * words 63-65), start with the 320x214 picture: older builds showed it
@@ -43,6 +45,7 @@
 #include "nspire_brightness.h"
 #include "nspire_paths.h"
 #include "nspire_selfstore.h"
+#include "nspire_frameskip.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,6 +66,9 @@ u32 nspire_save_on_exit = 1;
 u32 nspire_load_on_start = 1;
 u32 nspire_cpu_speed = 0;
 u32 nspire_compress_saves = 1;
+/* Fast forward's top speed: the Graphics menu's index (nspire_frameskip.h);
+ * the files keep tenths (word 67). */
+u32 nspire_ff_max = NSPIRE_FF_UNLIMITED;
 /* The menu's "Settings for" and "Keys for": 0 all games, 1 this game. */
 u32 nspire_settings_for;
 u32 nspire_keys_for;
@@ -96,6 +102,7 @@ static const struct
   { "save_on_exit", &nspire_save_on_exit, 2 },
   { "load_on_start", &nspire_load_on_start, 2 },
   { "compress_saves", &nspire_compress_saves, 2 },
+  { "fast_forward_max", &nspire_ff_max, NSPIRE_FF_CHOICES },
   { "cpu_speed", &nspire_cpu_speed, CPU_SPEEDS },
 };
 
@@ -281,6 +288,7 @@ s32 nspire_config_load(void)
     nspire_fps_overlay = o[62] % 3;
   }
   nspire_compress_saves = qol == 3 ? o[66] % 2 : 1;
+  nspire_ff_max = qol == 3 && o[67] >= 11 && o[67] <= 100 ? o[67] - 11 : NSPIRE_FF_UNLIMITED;
   if (qol >= 2)
   {
     nspire_brightness = o[63] % (BRIGHTNESS_LEVELS + 1);
@@ -349,6 +357,7 @@ static int write_global_file(void)
   o[62] = nspire_fps_overlay;
   o[63] = nspire_brightness;
   o[66] = nspire_compress_saves % 2;
+  o[67] = nspire_ff_max < NSPIRE_FF_UNLIMITED ? nspire_ff_max + 11 : 0;
 
   /* The copy in the saves folder, then the program file. */
   nspire_save_dir_make();

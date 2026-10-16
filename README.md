@@ -207,11 +207,16 @@ before), else from older builds' `gpsp.cfg.tns` (moved into `zgpSP_saves`,
 only read), and puts them into the program file right away.
 
 **Speed.** *Show FPS counter* (Graphics options): off, on ("58/60": frames drawn
-a second / the most there can be; in fast forward the same, against the 12
-it draws a second at normal speed, as in PocketSNES) or detailed (ms per frame running the game,
-drawing, showing, idle; logged to `gpsp_perf.txt.tns`). *Run speed test* runs
-the game from where it is for 20 seconds (normal play, no speed limit with every
-frame drawn, no limit with nothing drawn) and writes `gpsp_results.txt.tns`.
+a second / the most there can be; in fast forward, game frames a second /
+60, so 2x reads "120/60") or detailed (ms per frame running the game,
+drawing, showing, idle; logged to `gpsp_perf.txt.tns`). *Fast forward max
+speed* (Graphics options): 1.1x to 10.0x in steps of 0.1x, or unlimited
+(the default: as fast as the game runs). Fast forward never skips game
+frames; with frameskip off it draws a picture each time the LCD has shown
+the last one, and fewer when that would hold the game below its speed (2x
+when unlimited). *Run speed test* runs the game from where it is for 25
+seconds (normal play, no speed limit with every frame drawn, no limit with
+nothing drawn, fast forward) and writes `gpsp_results.txt.tns`.
 *CPU speed (CX II)* in Emulator options: normal, or 408 to 504 MHz in 12 MHz
 steps while a game runs (PocketSNES's clock switch and list). Try 432 first:
 on the calculator this was made on, 456 glitched now and then and 480 froze

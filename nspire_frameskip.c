@@ -24,13 +24,31 @@
 /* Fast forward draws one frame in this many (as gpSP always did), unless
  * frameskip is off. */
 #define FAST_FORWARD_DRAW_EVERY 5
-/* Fast forward with frameskip off: the game runs as fast as it can, and is
- * kept at twice its speed or more by drawing fewer pictures when drawing
- * them all would slow it down: frames are due every 0.48 GBA frame times
- * (124 a second, so the counter shows 120 or more), and at least one in
- * FAST_FORWARD_MAX_SKIP + 1 frames is drawn. */
+/* Fast forward with frameskip off: the game runs as fast as it can (or up
+ * to its top speed, nspire_ff_max), and is kept at twice its speed or more
+ * (or at the top speed) by drawing fewer pictures when drawing them all
+ * would slow it down: without a top speed, frames are due every 0.48 GBA
+ * frame times (124 a second), and at least one in FAST_FORWARD_MAX_SKIP + 1
+ * frames is drawn. */
 #define FAST_FORWARD_PERIOD (FRAME_PERIOD / 25u * 12u)
 #define FAST_FORWARD_MAX_SKIP 7
+
+/* The names of fast forward's top speeds (nspire_ff_max, in
+ * nspire_config.c): 1.1x to 10.0x in tenths, then unlimited. */
+const char *const nspire_ff_max_names[NSPIRE_FF_CHOICES] =
+{
+  "1.1x", "1.2x", "1.3x", "1.4x", "1.5x", "1.6x", "1.7x", "1.8x", "1.9x",
+  "2.0x", "2.1x", "2.2x", "2.3x", "2.4x", "2.5x", "2.6x", "2.7x", "2.8x",
+  "2.9x", "3.0x", "3.1x", "3.2x", "3.3x", "3.4x", "3.5x", "3.6x", "3.7x",
+  "3.8x", "3.9x", "4.0x", "4.1x", "4.2x", "4.3x", "4.4x", "4.5x", "4.6x",
+  "4.7x", "4.8x", "4.9x", "5.0x", "5.1x", "5.2x", "5.3x", "5.4x", "5.5x",
+  "5.6x", "5.7x", "5.8x", "5.9x", "6.0x", "6.1x", "6.2x", "6.3x", "6.4x",
+  "6.5x", "6.6x", "6.7x", "6.8x", "6.9x", "7.0x", "7.1x", "7.2x", "7.3x",
+  "7.4x", "7.5x", "7.6x", "7.7x", "7.8x", "7.9x", "8.0x", "8.1x", "8.2x",
+  "8.3x", "8.4x", "8.5x", "8.6x", "8.7x", "8.8x", "8.9x", "9.0x", "9.1x",
+  "9.2x", "9.3x", "9.4x", "9.5x", "9.6x", "9.7x", "9.8x", "9.9x", "10.0x",
+  "unlimited"
+};
 
 enum nspire_pace_mode nspire_pace = PACE_NORMAL;
 
@@ -121,42 +139,41 @@ void nspire_perf_log_flush(void)
   perf_log_count = 0;
 }
 
-/* Fast forward with frameskip off counts game frames against twice the
- * GBA's speed (see fast_forward_draw). */
+/* Fast forward counts game frames, against the GBA's 60 a second (so 2x
+ * reads 120/60). */
 static int counts_game_frames(void)
 {
-  return nspire_pace == PACE_FAST_FORWARD ||
-         (nspire_pace == PACE_NORMAL && !synchronize_flag && current_frameskip_type == no_frameskip);
+  return nspire_pace == PACE_FAST_FORWARD || (nspire_pace == PACE_NORMAL && !synchronize_flag);
 }
 
-/* Frames drawn per second at full speed with this frameskip; in fast
- * forward, at normal speed (it draws one frame in FAST_FORWARD_DRAW_EVERY),
- * as PocketSNES counts it; with frameskip off, game frames at twice the
- * speed. */
+/* Frames drawn per second at full speed with this frameskip; game frames
+ * at normal speed in fast forward. */
 static u32 fps_expected(void)
 {
   u32 n = 0;
-  if (counts_game_frames())
-    return 120;
-  if (!synchronize_flag)
-    n = FAST_FORWARD_DRAW_EVERY - 1;
-  else if (current_frameskip_type == manual_frameskip)
+  if (!counts_game_frames() && current_frameskip_type == manual_frameskip)
     n = frameskip_value > 99 ? 99 : frameskip_value;
   return (5973u + 50u * (n + 1u)) / (100u * (n + 1u));
 }
 
-/* Fast forward with frameskip off: whether this frame is drawn. A picture
- * is drawn once the LCD has taken the last one (nspire_flip_taken: it takes
- * one per refresh, so pictures drawn faster would never be shown), or two
- * refreshes after it whatever the LCD says; and not while the game is
- * behind its fast forward speed (ff_next, when this frame is due, with at
- * most a frame's lead or 4 frames' lag kept), unless FAST_FORWARD_MAX_SKIP
- * frames in a row went undrawn. */
-static int fast_forward_draw(void)
+/* 16.16 timer ticks per frame at fast forward's top speed, or 0 without
+ * one (the speed test's fast forward has none). */
+static u32 fast_forward_limit(void)
 {
+  if (nspire_pace != PACE_NORMAL || nspire_ff_max >= NSPIRE_FF_UNLIMITED)
+    return 0;
+  return (u32)((u64)FRAME_PERIOD * 10u / (nspire_ff_max + 11u));
+}
+
+/* Fast forward's pace: ff_next is when this frame is due, at the top speed
+ * or (without one) FAST_FORWARD_PERIOD. With a top speed, a frame that's
+ * early waits for it; otherwise at most a frame's lead is kept. At most 4
+ * frames' lag is kept. Returns how far ahead of it the game is (ticks). */
+static s32 fast_forward_pace(void)
+{
+  u32 limit = fast_forward_limit();
   u32 now = nspire_ticks();
   s32 ahead;
-  int draw;
 
   if (!ff_started)
   {
@@ -166,17 +183,34 @@ static int fast_forward_draw(void)
     ff_next_frac = 0;
     skipped_frames = 0;
   }
-  ff_next_frac += FAST_FORWARD_PERIOD;
+  ff_next_frac += limit ? limit : FAST_FORWARD_PERIOD;
   ff_next += ff_next_frac >> 16;
   ff_next_frac &= 0xFFFF;
   ahead = (s32)(ff_next - now);
+  if (limit && ahead > 0)
+  {
+    nspire_wait_until(ff_next);
+    nspire_perf_totals.idle += nspire_ticks() - now;
+    return 0;
+  }
   if (ahead > (s32)FRAME_TICKS)
     ff_next = now + FRAME_TICKS;
   else if (ahead < -(s32)(FRAME_TICKS * 4))
     ff_next = now - FRAME_TICKS * 4;
+  return ahead;
+}
 
-  draw = (nspire_flip_taken() || now - ff_last_picture >= FRAME_TICKS * 2) &&
-         (ahead >= 0 || skipped_frames >= FAST_FORWARD_MAX_SKIP);
+/* Fast forward with frameskip off: whether this frame is drawn. A picture
+ * is drawn once the LCD has taken the last one (nspire_flip_taken: it takes
+ * one per refresh, so pictures drawn faster would never be shown), or two
+ * refreshes after it whatever the LCD says; and not while the game is
+ * behind its pace, unless FAST_FORWARD_MAX_SKIP frames in a row went
+ * undrawn. */
+static int fast_forward_draw(s32 ahead)
+{
+  u32 now = nspire_ticks();
+  int draw = (nspire_flip_taken() || now - ff_last_picture >= FRAME_TICKS * 2) &&
+             (ahead >= 0 || skipped_frames >= FAST_FORWARD_MAX_SKIP);
   if (draw)
     ff_last_picture = now;
   return draw;
@@ -237,12 +271,16 @@ void nspire_frameskip_begin_frame(void)
       draw = 1;
     else if (nspire_pace == PACE_UNCAPPED_DRAW_NONE)
       draw = 0;
-    else if (nspire_pace == PACE_FAST_FORWARD || current_frameskip_type == no_frameskip)
-      draw = fast_forward_draw();
     else
     {
-      draw = fast_forward_counter == 0;
-      fast_forward_counter = (fast_forward_counter + 1) % FAST_FORWARD_DRAW_EVERY;
+      s32 ahead = fast_forward_pace();
+      if (nspire_pace == PACE_FAST_FORWARD || current_frameskip_type == no_frameskip)
+        draw = fast_forward_draw(ahead);
+      else
+      {
+        draw = fast_forward_counter == 0;
+        fast_forward_counter = (fast_forward_counter + 1) % FAST_FORWARD_DRAW_EVERY;
+      }
     }
     next_frame = nspire_ticks();
     next_frame_frac = 0;
