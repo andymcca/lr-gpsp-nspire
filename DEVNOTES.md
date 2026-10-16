@@ -381,3 +381,46 @@ Open items and ideas
 * Turn the sharp pictures in strips right after their lines are drawn,
   while they're still in the data cache (~0.7-1 ms, uncertain).
 * Profile-guided build (never tried here or in PocketSNES).
+
+Speed (2026-10-15)
+------------------
+
+Goal (the owner): fast forward at 2x, never below 120 game frames a
+second, with the settings unchanged (scaled/blended 3:2, interframe
+blending, frameskip off, video.cc, Partial SMC, 16 MB, 396 MHz).
+
+**PC estimate**: `tests/calc_speed.sh [STATE] [--frames N] [--top N]
+[--functions-of A-B] [--keys F]` runs `tests/arm/perf.c` (core, renderer,
+picture output, calculator flags) under qemu-arm with an ARM926 model
+(`tools/calc_speed/arm926.c`: pipeline, 16 KB I / 8 KB D cache, write
+buffer, 120-cycle line fills and ~6 cycles per word written, as measured
+in PocketSNES) and prints ms per frame for game / drawing / picture. It came
+within 6% of PocketSNES's three calculator speed tests (scale 1.05). Needs
+qemu-arm with plugins (`~/nspire/build/tools/qemu-plugins`, built as in
+PocketSNES's TESTING.md). Not yet checked against gpSP on the calculator:
+the speed test's new fast forward part is the check.
+
+Done (estimates, owner's Emerald route state / grass-to-battle replay):
+* Fast forward with frameskip off draws a picture only when the LCD has
+  taken the last one (`nspire_flip_taken`; pictures drawn faster are never
+  shown) and skips pictures while the game is behind 124 frames a second
+  (at least one in 8 drawn). The counter shows game frames/120 there. Game
+  frames are never skipped. Speed test part 4 runs it.
+* Dynarec: memory accesses `bl` a shared region-lookup stub
+  (`mem_dispatch_*`) and block exits `bl` a shared cycle check
+  (`arm_check_update_*`): translated code 488 -> 315 KB, game time
+  5.8 -> 5.2 ms (route), 4.7 -> 4.3 (replay). The 16 KB instruction cache
+  is what the game code waits on most.
+* 3:2 blended picture: interframe blending in the same pass, frames drawn
+  into two buffers in turn (`nspire_video_frame_start`) instead of copying
+  the previous one: 4.5 -> 4.0 ms. Pixel-exact (`blend_test` against
+  `tests/arm/blend_ref.c`, the old code).
+* video.cc at -O2/-Os is slower (5.6/6.6 vs 4.9 ms): -O3 stays.
+
+Still slow: the wild-encounter wipe (~0.5 s): an IRQ every scanline, so
+the renderer, update_gba and the IRQ handler evict each other from the
+instruction cache: ~14 ms of game time a frame there, so fast forward dips
+to ~70 for that half second. Next ideas: hand-written ARM for the 3:2
+picture (~9.8 instead of 13 instructions a pixel, GCC spills), rendering
+lines into a cached buffer and turning them while hot (saves reading the
+frame back), faster tile drawing in video.cc, block lookup cache.
