@@ -442,6 +442,20 @@ u32 arm_disect_imm_32bit(u32 imm, u32 *stores, u32 *rotations)
   write32(new_pc);                                                            \
   generate_branch_filler(ARMCOND_AL, writeback_location)                      \
 
+#ifdef NSPIRE_BUILD
+/* The cycle check at a block's exit, in 3 words instead of 6 (a fifth of
+ * the translated code; the ARM926's instruction cache is 16 KB): a shared
+ * stub (arm_stub.S, arm_check_update_*) returns past the PC word while
+ * cycles are left, else updates the GBA from there. */
+void arm_check_update_arm(void);
+void arm_check_update_thumb(void);
+
+#define generate_branch_update(writeback_location, new_pc, mode)              \
+  ARM_BL(0, arm_relative_offset(translation_ptr, (u32)arm_check_update_##mode)); \
+  write32(new_pc);                                                            \
+  generate_branch_filler(ARMCOND_AL, writeback_location)                      \
+
+#else
 #define generate_branch_update(writeback_location, new_pc, mode)              \
   ARM_MOV_REG_IMMSHIFT(0, reg_a0, reg_cycles, ARMSHIFT_LSR, 31);              \
   /* If counter is negative, skip the update call (2 insts) */                \
@@ -449,6 +463,8 @@ u32 arm_disect_imm_32bit(u32 imm, u32 *stores, u32 *rotations)
   write32(new_pc);                                                            \
   generate_function_far_call(armfn_gbaup_##mode);   /* 2 instructions */      \
   generate_branch_filler(ARMCOND_AL, writeback_location)                      \
+
+#endif
 
 
 #define generate_branch_no_cycle_update(writeback_location, new_pc, mode)     \

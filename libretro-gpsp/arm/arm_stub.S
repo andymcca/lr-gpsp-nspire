@@ -182,6 +182,11 @@ _##symbol:
 #define cycles_straight()  mvn r0, reg_cycles
 #define cycles_add()       mov r0, #0
 
+@ For arm_check_update_* (Nspire): PC word after the call, cycles counted.
+#define return_check()      add pc, lr, #4
+#define load_pc_check()     ldr r0, [lr]
+#define cycles_check()      mvn r0, reg_cycles
+
 #define arm_update_gba_builder(name, mode, return_op)                        ;\
                                                                              ;\
 defsymbl(arm_update_gba_##name)                                              ;\
@@ -230,6 +235,18 @@ arm_update_gba_builder(thumb, thumb, straight)
 
 arm_update_gba_builder(idle_arm, arm, add)
 arm_update_gba_builder(idle_thumb, thumb, add)
+
+arm_update_gba_builder(check_arm, arm, check)
+arm_update_gba_builder(check_thumb, thumb, check)
+
+@ A block's exit (Nspire, arm_emit.h generate_branch_update):
+@   bl arm_check_update_MODE ; .word PC ; b next block
+@ With cycles left (the counter is negative) back past the PC word, else
+@ update the GBA as arm_update_gba_MODE does. Flags untouched; r0 is free.
+
+#define check_update_builder(mode)                                           ;defsymbl(arm_check_update_##mode)                                            ;  mov r0, reg_cycles, lsr #31             /* 1: cycles left                */;  add pc, pc, r0, lsl #2                                                     ;  nop                                                                        ;  b arm_update_gba_check_##mode                                              ;  add pc, lr, #4                          /* past the PC word              */;
+check_update_builder(arm)
+check_update_builder(thumb)
 
 
 @ Cheat hooks for master function
