@@ -1264,10 +1264,9 @@ quit
 
 def test_fast_forward_pace():
     """Fast forward with frameskip off (the owner's settings): the game runs
-    at twice its speed or more, pictures are drawn at most at the LCD's pace
-    (one per refresh; more would never be shown), and fewer when drawing
-    them would hold the game below twice its speed. The counter shows game
-    frames against 60."""
+    as fast as it can, and every LCD refresh gets a new picture (60 a
+    second; more would never be shown). The counter shows game frames
+    against 60."""
     def ff_run(name, costs):
         return Run(name, files={"gpsp_qol.cfg.tns": owner_config()}).run(costs + """
 wait 1
@@ -1290,20 +1289,20 @@ note back_b
 quit
 """)
 
-    # Every frame drawn would take 5 + 4 + 4 ms (77 a second): fast forward
-    # has to leave pictures out to keep 120 game frames a second.
+    # A drawn frame takes 5 + 4 + 4 ms, a refresh 16.7: still a picture per
+    # refresh, and the game faster than normal in between.
     heavy = ff_run("ff_heavy", "cost frame 5\ncost line 25\ncost turn 4.5\ncost touchpad 0.4\n")
     n = heavy.notes
     game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
     shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
-    check(game >= 119, "fast forward, heavy game: %.1f game frames a second (120 or more)" % game)
-    check(20 <= shown <= 61, "fast forward, heavy game: %.1f pictures a second" % shown)
+    check(game >= 90, "fast forward, heavy game: %.1f game frames a second" % game)
+    check(58 <= shown <= 61, "fast forward, heavy game: %.1f pictures a second (one per refresh)" % shown)
     normal = (n["normal_b"]["frame"] - n["normal_a"]["frame"]) / 2.0
     check(58 <= normal <= 61, "fast forward, heavy game: normal speed before: %.1f" % normal)
     back = n["back_b"]["frame"] - n["back_a"]["frame"]
     check(57 <= back <= 61, "fast forward, heavy game: normal speed after: %d" % back)
     box = heavy.shot("counter").box(0, 12)
-    check(box is not None and 30 < box[2] < 60, "fast forward: the counter, game frames/60: %s" % (box,))
+    check(box is not None and 20 < box[2] < 60, "fast forward: the counter, game frames/60: %s" % (box,))
 
     # A light game: as fast as it goes, but no more than a picture per refresh.
     light = ff_run("ff_light", "cost frame 2\ncost line 10\ncost turn 2\ncost touchpad 0.4\n")
@@ -1311,7 +1310,7 @@ quit
     game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
     shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
     check(game >= 250, "fast forward, light game: %.1f game frames a second" % game)
-    check(50 <= shown <= 61, "fast forward, light game: %.1f pictures a second (one per refresh)" % shown)
+    check(58 <= shown <= 61, "fast forward, light game: %.1f pictures a second (one per refresh)" % shown)
 
 
 def test_fast_forward_max_speed():
@@ -1346,7 +1345,7 @@ quit
         shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
         normal = (n["normal_b"]["frame"] - n["normal_a"]["frame"]) / 2.0
         check(low <= game <= high, "fast forward max %d.%dx: %.1f game frames a second" % (tenths // 10, tenths % 10, game))
-        check(40 <= shown <= 61, "fast forward max %d.%dx: %.1f pictures a second" % (tenths // 10, tenths % 10, shown))
+        check(58 <= shown <= 61, "fast forward max %d.%dx: %.1f pictures a second" % (tenths // 10, tenths % 10, shown))
         check(58 <= normal <= 61, "fast forward max %d.%dx: normal play %.1f" % (tenths // 10, tenths % 10, normal))
 
     # 3.0x out of reach (5 ms a frame running, 8 more drawing): pictures
@@ -1356,7 +1355,7 @@ quit
     n = r.notes
     game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
     shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
-    check(shown >= 50, "fast forward max 3.0x out of reach: %.1f pictures a second (all the LCD shows)" % shown)
+    check(58 <= shown <= 61, "fast forward max 3.0x out of reach: %.1f pictures a second (all the LCD shows)" % shown)
     check(85 <= game < 179, "fast forward max 3.0x out of reach: %.1f game frames a second" % game)
 
     # The menu: Graphics, line 12; left from unlimited is 10.0x.

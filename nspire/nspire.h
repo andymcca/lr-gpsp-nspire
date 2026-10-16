@@ -34,6 +34,8 @@ void nspire_flip(void);
 int nspire_screen_index(void);
 /* Whether the LCD has started showing the frame nspire_flip gave it last. */
 int nspire_flip_taken(void);
+/* About how long (timer ticks) until the LCD's next refresh starts. */
+u32 nspire_lcd_ticks_to_refresh(void);
 /* Waits for the LCD's next refresh (at most 1/20 s); menus run at its pace. */
 void update_at_vblank();
 
