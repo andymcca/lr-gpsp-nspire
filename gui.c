@@ -2181,9 +2181,9 @@ u32 menu(u16 *original_screen)
      "scenes (uses video_blend.S).", 11),
     string_selection_option(NULL, "Fast forward max speed",
      (u8 **)nspire_ff_max_names, &nspire_ff_max, NSPIRE_FF_CHOICES,
-     "Fast forward's top speed, 1.1x to 10x, or\n"
-     "unlimited. If the game can't reach it, it runs as\n"
-     "fast as it can and still draws every picture.", 12),
+     "Fast forward's top speed, in steps of 0.1x up to\n"
+     "10x; unlimited: as fast as the game can run. It\n"
+     "keeps this speed by drawing fewer pictures.", 12),
 #endif
 #elif !defined(GP2X_BUILD)
     string_selection_option(NULL, "Frameskip type", frameskip_options,
