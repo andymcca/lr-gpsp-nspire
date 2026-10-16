@@ -166,9 +166,12 @@ static u32 fast_forward_limit(void)
 }
 
 /* Fast forward's pace: ff_next is when this frame is due, at the top speed
- * or (without one) FAST_FORWARD_PERIOD. With a top speed, a frame that's
- * early waits for it; otherwise at most a frame's lead is kept. At most 4
- * frames' lag is kept. Returns how far ahead of it the game is (ticks). */
+ * or (without one) FAST_FORWARD_PERIOD. With a top speed it's only a cap:
+ * a frame that's early waits for it, a late one just goes (no pictures are
+ * left out to catch up, and at most a frame's lag is made up: the owner
+ * wants every picture when the game can't reach the speed chosen). Without one, at most a
+ * frame's lead or 4 frames' lag is kept, and pictures make way while the
+ * game is behind. Returns how far ahead of it the game is (ticks). */
 static s32 fast_forward_pace(void)
 {
   u32 limit = fast_forward_limit();
@@ -187,10 +190,15 @@ static s32 fast_forward_pace(void)
   ff_next += ff_next_frac >> 16;
   ff_next_frac &= 0xFFFF;
   ahead = (s32)(ff_next - now);
-  if (limit && ahead > 0)
+  if (limit)
   {
-    nspire_wait_until(ff_next);
-    nspire_perf_totals.idle += nspire_ticks() - now;
+    if (ahead > 0)
+    {
+      nspire_wait_until(ff_next);
+      nspire_perf_totals.idle += nspire_ticks() - now;
+    }
+    else if (ahead < -(s32)FRAME_TICKS)
+      ff_next = now - FRAME_TICKS;   /* up to a frame's lag made up, not more */
     return 0;
   }
   if (ahead > (s32)FRAME_TICKS)
