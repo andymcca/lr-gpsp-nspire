@@ -24,9 +24,15 @@
 /* Fast forward draws one frame in this many (as gpSP always did), unless
  * frameskip is off. */
 #define FAST_FORWARD_DRAW_EVERY 5
-/* Fast forward runs the game as fast as it can, or up to its top speed
- * (nspire_ff_max), and with frameskip off draws every picture the LCD can
- * show (the owner: over 60 game frames a second, 60 pictures). */
+/* Fast forward with frameskip off: the game runs as fast as it can (or up
+ * to its top speed, nspire_ff_max), and is kept at twice its speed or more
+ * (or at the top speed) by drawing fewer pictures when drawing them all
+ * would slow it down: without a top speed, frames are due every 0.48 GBA
+ * frame times (124 a second), and at least one in FAST_FORWARD_MAX_SKIP + 1
+ * frames is drawn. */
+#define FAST_FORWARD_PERIOD (FRAME_PERIOD / 25u * 12u)
+#define FAST_FORWARD_MAX_SKIP 7
+
 /* The names of fast forward's top speeds (nspire_ff_max, in
  * nspire_config.c): 1.1x to 10.0x in tenths, then unlimited. */
 const char *const nspire_ff_max_names[NSPIRE_FF_CHOICES] =
@@ -48,7 +54,7 @@ enum nspire_pace_mode nspire_pace = PACE_NORMAL;
 
 static u32 next_frame, next_frame_frac;
 static u32 skipped_frames, manual_counter, fast_forward_counter;
-static u32 ff_last_picture, ff_next, ff_next_frac, ff_picture_start, ff_picture_ticks;
+static u32 ff_last_picture, ff_next, ff_next_frac;
 static int ff_started;
 
 struct nspire_perf nspire_perf_totals;
@@ -159,10 +165,14 @@ static u32 fast_forward_limit(void)
   return (u32)((u64)FRAME_PERIOD * 10u / (nspire_ff_max + 11u));
 }
 
-/* Fast forward's top speed: ff_next is when this frame is due at it. It's
- * only a cap: an early frame waits for it, a late one just goes (at most a
- * frame's lag is made up), and no pictures are left out to reach it. */
-static void fast_forward_pace(void)
+/* Fast forward's pace: ff_next is when this frame is due, at the top speed
+ * or (without one) FAST_FORWARD_PERIOD. With a top speed it's only a cap:
+ * a frame that's early waits for it, a late one just goes (no pictures are
+ * left out to catch up, and at most a frame's lag is made up: the owner
+ * wants every picture when the game can't reach the speed chosen). Without one, at most a
+ * frame's lead or 4 frames' lag is kept, and pictures make way while the
+ * game is behind. Returns how far ahead of it the game is (ticks). */
+static s32 fast_forward_pace(void)
 {
   u32 limit = fast_forward_limit();
   u32 now = nspire_ticks();
@@ -172,41 +182,45 @@ static void fast_forward_pace(void)
   {
     ff_started = 1;
     ff_last_picture = now - FRAME_TICKS * 2;
-    ff_picture_ticks = FRAME_TICKS / 2;
     ff_next = now;
     ff_next_frac = 0;
+    skipped_frames = 0;
   }
-  if (!limit)
-    return;
-  ff_next_frac += limit;
+  ff_next_frac += limit ? limit : FAST_FORWARD_PERIOD;
   ff_next += ff_next_frac >> 16;
   ff_next_frac &= 0xFFFF;
   ahead = (s32)(ff_next - now);
-  if (ahead > 0)
+  if (limit)
   {
-    nspire_wait_until(ff_next);
-    nspire_perf_totals.idle += nspire_ticks() - now;
+    if (ahead > 0)
+    {
+      nspire_wait_until(ff_next);
+      nspire_perf_totals.idle += nspire_ticks() - now;
+    }
+    else if (ahead < -(s32)FRAME_TICKS)
+      ff_next = now - FRAME_TICKS;   /* up to a frame's lag made up, not more */
+    return 0;
   }
-  else if (ahead < -(s32)FRAME_TICKS)
-    ff_next = now - FRAME_TICKS;
+  if (ahead > (s32)FRAME_TICKS)
+    ff_next = now + FRAME_TICKS;
+  else if (ahead < -(s32)(FRAME_TICKS * 4))
+    ff_next = now - FRAME_TICKS * 4;
+  return ahead;
 }
 
-/* Fast forward with frameskip off: whether this frame is drawn, so that
- * each LCD refresh gets a new picture and none is drawn that it would never
- * show (it takes the newest at each refresh). A frame is drawn once the LCD
- * has taken the last picture, or before then if the next refresh comes
- * well before a drawn frame would end (ff_picture_ticks, the last one's
- * time, less an eighth): the new picture then lands after that refresh, so
- * the last one is still shown, and in time for the one after. Two
- * refreshes after the last picture one is drawn whatever the LCD says. */
-static int fast_forward_draw(void)
+/* Fast forward with frameskip off: whether this frame is drawn. A picture
+ * is drawn once the LCD has taken the last one (nspire_flip_taken: it takes
+ * one per refresh, so pictures drawn faster would never be shown), or two
+ * refreshes after it whatever the LCD says; and not while the game is
+ * behind its pace, unless FAST_FORWARD_MAX_SKIP frames in a row went
+ * undrawn. */
+static int fast_forward_draw(s32 ahead)
 {
   u32 now = nspire_ticks();
-  int draw = nspire_flip_taken() ||
-             nspire_lcd_ticks_to_refresh() < ff_picture_ticks - ff_picture_ticks / 8 ||
-             now - ff_last_picture >= FRAME_TICKS * 2;
+  int draw = (nspire_flip_taken() || now - ff_last_picture >= FRAME_TICKS * 2) &&
+             (ahead >= 0 || skipped_frames >= FAST_FORWARD_MAX_SKIP);
   if (draw)
-    ff_last_picture = ff_picture_start = now;
+    ff_last_picture = now;
   return draw;
 }
 
@@ -267,9 +281,9 @@ void nspire_frameskip_begin_frame(void)
       draw = 0;
     else
     {
-      fast_forward_pace();
+      s32 ahead = fast_forward_pace();
       if (nspire_pace == PACE_FAST_FORWARD || current_frameskip_type == no_frameskip)
-        draw = fast_forward_draw();
+        draw = fast_forward_draw(ahead);
       else
       {
         draw = fast_forward_counter == 0;
@@ -332,8 +346,6 @@ void nspire_frameskip_end_frame(u32 output_ticks)
   {
     nspire_perf_totals.drawn++;
     nspire_perf_totals.output += output_ticks;
-    if (counts_game_frames())
-      ff_picture_ticks = now - ff_picture_start;
   }
 
   /* Frames drawn per second (game frames in fast forward with frameskip

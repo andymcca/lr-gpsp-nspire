@@ -212,27 +212,6 @@ int nspire_flip_taken(void)
 	return flip_taken;
 }
 
-/* About how long (timer ticks) until the LCD's next refresh starts. It
- * reads a buffer's 320 lines, then waits out the porches: 447 lines' time
- * in all (the CX II OS's timings), about 60 times a second. In the porches
- * (its address just past a buffer) it's under 127 lines' time: 0. */
-u32 nspire_lcd_ticks_to_refresh(void)
-{
-	uintptr_t reading = HW_LCD_CURRENT_GET();
-	int i;
-
-	for (i = 0; i < SCREENS; i++)
-	{
-		uintptr_t start = (uintptr_t)screens[i];
-		if (reading >= start && reading < start + sizeof(screens[i]))
-		{
-			u32 refresh = NSPIRE_TICK_HZ / 60;
-			return refresh - (u32)((u64)refresh * (reading - start) * 320 / (sizeof(screens[i]) * 447));
-		}
-	}
-	return 0;
-}
-
 /* Waits for the LCD's next vertical compare interrupt (menus run at the LCD's
  * pace). Frames are shown by nspire_flip. */
 void update_at_vblank(void)
