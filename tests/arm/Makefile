@@ -11,6 +11,8 @@
 #                 run (as a damaged Advance Wars does): it has to stop there
 #   replay        the core playing a real game from a save state (run.sh
 #                 runs it on Pokemon Emerald when $GBA_GAMES has it)
+#   perf          replay plus the picture output, for the speed estimate
+#                 (tests/calc_speed.sh runs it under the ARM926 model)
 # The calculator's files are compiled as for the calculator (nspire-gcc,
 # -O3, without -flto so they link here); the core is compiled with the
 # calculator's flags by arm-none-eabi-gcc with the PC tests' stand-in os.h
@@ -53,7 +55,7 @@ CORE_OBJS := $(addprefix $(BUILD)/core_,$(addsuffix .o,$(CORE_C))) $(BUILD)/core
              $(BUILD)/newlib_shim.o
 
 all: $(BUILD)/blend_test $(BUILD)/fill_test $(BUILD)/dynarec_test $(BUILD)/replay $(BUILD)/ram_code.gba \
-     $(BUILD)/badjump_test $(BUILD)/bad_jump_thumb.gba $(BUILD)/bad_jump_arm.gba
+     $(BUILD)/badjump_test $(BUILD)/bad_jump_thumb.gba $(BUILD)/bad_jump_arm.gba $(BUILD)/perf
 
 $(BUILD):
 	mkdir -p $@
@@ -124,12 +126,24 @@ $(BUILD)/replay.o: replay.c | $(BUILD)
 	arm-none-eabi-gcc $(CORE_FLAGS) -std=gnu99 -c $< -o $@
 $(BUILD)/badjump_test.o: badjump_test.c | $(BUILD)
 	arm-none-eabi-gcc $(CORE_FLAGS) -std=gnu99 -c $< -o $@
+$(BUILD)/perf.o: perf.c | $(BUILD)
+	arm-none-eabi-gcc $(CORE_FLAGS) -std=gnu99 -c $< -o $@
+$(BUILD)/perf_stubs.o: perf_stubs.c | $(BUILD)
+	arm-none-eabi-gcc $(CORE_FLAGS) -std=gnu99 -c $< -o $@
 
 $(BUILD)/dynarec_test: $(BUILD)/dynarec_test.o $(CORE_OBJS)
 	arm-none-eabi-g++ $(ARCH) -specs=rdimon.specs $^ $(LIBZ) -lm -o $@
 $(BUILD)/replay: $(BUILD)/replay.o $(CORE_OBJS)
 	arm-none-eabi-g++ $(ARCH) -specs=rdimon.specs $^ $(LIBZ) -lm -o $@
 $(BUILD)/badjump_test: $(BUILD)/badjump_test.o $(CORE_OBJS)
+	arm-none-eabi-g++ $(ARCH) -specs=rdimon.specs $^ $(LIBZ) -lm -o $@
+
+# The speed harness: the core and the picture output (as the calculator
+# shows a game frame), with perf_stubs.c's screen buffers.
+PERF_FRONT := nspire_video_present nspire_video_ui nspire_blend nspire_turn nspire_upscale_from_gba
+PERF_OBJS := $(filter-out $(BUILD)/core_stubs.o,$(CORE_OBJS)) $(BUILD)/perf_stubs.o \
+             $(addprefix $(BUILD)/front_,$(addsuffix .o,$(PERF_FRONT))) $(BUILD)/upscale_aspect.o
+$(BUILD)/perf: $(BUILD)/perf.o $(PERF_OBJS)
 	arm-none-eabi-g++ $(ARCH) -specs=rdimon.specs $^ $(LIBZ) -lm -o $@
 
 # The test ROM: ARM code at the cartridge's address, as a plain image.
