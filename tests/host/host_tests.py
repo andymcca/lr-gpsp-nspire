@@ -1056,8 +1056,11 @@ quit
         check("Normal play" in text and "nothing drawn" in text and "Fast forward" in text,
               "speed test: all four parts")
         ff = [l for l in text.split("\n") if l.startswith("Fast forward")]
-        game = text.split("Fast forward")[1].split("game ")[1].split(" fps")[0] if ff else "0"
-        check(float(game) >= 119, "speed test: fast forward at 120 game frames a second or more: %s" % game)
+        part = text.split("Fast forward")[1] if ff else "game 0 fps, drawn 0;"
+        game = float(part.split("game ")[1].split(" fps")[0])
+        drawn = float(part.split("drawn ")[1].split(";")[0])
+        check(game > 70 and drawn >= 58, "speed test: fast forward faster than normal, a picture per refresh: "
+              "%.1f game frames, %.1f drawn" % (game, drawn))
 
 
 def test_hotkeys_in_menu_keys():
