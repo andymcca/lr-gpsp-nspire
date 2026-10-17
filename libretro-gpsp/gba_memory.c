@@ -22,6 +22,8 @@
 
 #ifdef NSPIRE_LIBRETRO
 #include <strings.h>
+#include "../nspire_gbz.h"
+#include "../nspire_zip.h"
 extern u32 nspire_rom_buffer_size_choice;
 #endif
 
@@ -444,6 +446,34 @@ u32 gamepak_sticky_bit[1024/32];
 // pages from, so there's no slowdown with opening and closing the file
 // a lot.
 RFILE *gamepak_file_large = NULL;
+#ifdef NSPIRE_LIBRETRO
+/* Set when the ROM file is a compressed one (nspire_gbz.h). */
+static gbz_rom *gamepak_gbz = NULL;
+/* Called while a ROM loads, with how much of it is in memory (the loading
+ * screen); and why the last load failed, if it can say. */
+void (*nspire_rom_progress)(u32 done, u32 total) = NULL;
+const char *nspire_rom_load_error = NULL;
+#endif
+
+/* Reads 32 KB ROM page 'page' into dst, from the ROM file. */
+static void read_gamepak_file_page(u32 page, u8 *dst)
+{
+#ifdef NSPIRE_LIBRETRO
+  if (gamepak_gbz)
+  {
+    gbz_read_page(gamepak_gbz, page, dst);
+    return;
+  }
+  /* A zipped game is all in memory: no pages to read (never happens). */
+  if (!gamepak_file_large)
+  {
+    memset(dst, 0xFF, 32 * 1024);
+    return;
+  }
+#endif
+  filestream_seek(gamepak_file_large, page * (32 * 1024), SEEK_SET);
+  filestream_read(gamepak_file_large, dst, (32 * 1024));
+}
 
 // Writes to these respective locations should trigger an update
 // so the related subsystem may react to it.
@@ -2283,8 +2313,7 @@ u8 *load_gamepak_page(u32 physical_index)
   // Fill in the entry
   gamepak_blk_queue[entry].phy_rom = physical_index;
 
-  filestream_seek(gamepak_file_large, physical_index * (32 * 1024), SEEK_SET);
-  filestream_read(gamepak_file_large, swap_location, (32 * 1024));
+  read_gamepak_file_page(physical_index, swap_location);
 
   // Map it to the read handlers now
   map_rom_entry(read, physical_index, swap_location, gamepak_size >> 15);
@@ -2405,6 +2434,10 @@ void init_memory(void)
 
 void memory_term(void)
 {
+#ifdef NSPIRE_LIBRETRO
+  gbz_close(gamepak_gbz);
+  gamepak_gbz = NULL;
+#endif
   if (gamepak_file_large)
   {
     filestream_close(gamepak_file_large);
@@ -2597,10 +2630,127 @@ unsigned memory_write_savestate(u8 *dst)
   return (unsigned int)(dst - startp);
 }
 
+#ifdef NSPIRE_LIBRETRO
+/* Forgets which ROM pages are where, for a new ROM. */
+static void reset_gamepak_pages(void)
+{
+  unsigned i;
+  u32 active_entries = gamepak_buffer_count * 32;
+
+  for (i = 0; i < 1024; i++)
+  {
+    gamepak_blk_queue[i].next_lru = (u16)(i + 1);
+    gamepak_blk_queue[i].phy_rom = -1;
+  }
+  gamepak_lru_head = 0;
+  gamepak_lru_tail = (active_entries > 0) ? (active_entries - 1) : 0;
+  clear_gamepak_stickybits();
+}
+
+/* The ROM manager is about to replace the running game's file
+ * (nspire_rom_manager.c). The file can go when the whole ROM is in memory:
+ * it's closed then, as nothing reads it any more. 0 when the game still
+ * reads pages of it. */
+int nspire_rom_file_release(void)
+{
+  if (gamepak_must_swap())
+    return 0;
+  gbz_close(gamepak_gbz);
+  gamepak_gbz = NULL;
+  if (gamepak_file_large)
+  {
+    filestream_close(gamepak_file_large);
+    gamepak_file_large = NULL;
+  }
+  return 1;
+}
+
+/* A zipped game (nspire_zip.h): unpacked into memory whole, as a deflated
+ * file can only be read from its start. When the ROM buffer is smaller
+ * than the ROM, more of it is taken for this game, if memory allows. */
+static s32 load_gamepak_zip(const char *name)
+{
+  zip_rom *zip = zip_open(name);
+  u32 size, blocks, rom_blocks, i, j;
+
+  if (!zip)
+  {
+    nspire_rom_load_error = "No GBA ROM in this zip, or it's damaged.";
+    return -1;
+  }
+  size = zip_size(zip);
+  blocks = (size + gamepak_buffer_blocksize - 1) / gamepak_buffer_blocksize;
+  while (gamepak_buffer_count < blocks && gamepak_buffer_count < 32)
+  {
+    void *ptr = malloc(gamepak_buffer_blocksize);
+    if (!ptr)
+      break;
+    gamepak_buffers[gamepak_buffer_count++] = (u8 *)ptr;
+  }
+  if (gamepak_buffer_count < blocks)
+  {
+    nspire_rom_load_error = "Not enough memory to unpack this zip.\n"
+                            "A .gbz (tools/gbz.py) needs less.";
+    zip_close(zip);
+    return -1;
+  }
+
+  reset_gamepak_pages();
+  gamepak_size = (size + 0x7FFF) & ~0x7FFF;
+  rom_blocks = gamepak_size >> 15;
+  map_null(read, 0x8000000, 0xD000000);
+  for (i = 0; i < blocks; i++)
+  {
+    u32 n = size - i * gamepak_buffer_blocksize;
+    if (n > gamepak_buffer_blocksize)
+      n = gamepak_buffer_blocksize;
+    if (zip_read(zip, gamepak_buffers[i], n))
+      break;
+    /* The last page's end past the ROM, as the file reads would leave it. */
+    memset(gamepak_buffers[i] + n, 0, ((n + 0x7FFF) & ~0x7FFF) - n);
+    for (j = 0; j < 32 && i * 32 + j < rom_blocks; j++)
+    {
+      u32 phyn = i * 32 + j;
+      u32 entry = evict_gamepak_page();
+      gamepak_blk_queue[entry].phy_rom = phyn;
+      map_rom_entry(read, phyn, &gamepak_buffers[i][32 * 1024 * j], rom_blocks);
+    }
+    if (nspire_rom_progress)
+      nspire_rom_progress(i + 1, blocks);
+  }
+  if (zip_check(zip))
+  {
+    nspire_rom_load_error = "This zip is damaged: its ROM doesn't\n"
+                            "read back right.";
+    zip_close(zip);
+    map_null(read, 0x8000000, 0xD000000);
+    reset_gamepak_pages();
+    gamepak_size = 0;
+    return -1;
+  }
+  zip_close(zip);
+  return 0;
+}
+#endif
+
 static s32 load_gamepak_raw(const char *name)
 {
   unsigned i, j;
   u32 active_entries;
+#ifdef NSPIRE_LIBRETRO
+  gbz_close(gamepak_gbz);
+  gamepak_gbz = NULL;
+  nspire_rom_load_error = NULL;
+  if (zip_is_zip(name))
+  {
+    if (gamepak_file_large)
+    {
+      filestream_close(gamepak_file_large);
+      gamepak_file_large = NULL;
+    }
+    return load_gamepak_zip(name);
+  }
+#endif
   if (gamepak_file_large)
   {
     filestream_close(gamepak_file_large);
@@ -2610,6 +2760,18 @@ static s32 load_gamepak_raw(const char *name)
                                        RETRO_VFS_FILE_ACCESS_HINT_NONE);
   if(gamepak_file_large)
   {
+#ifdef NSPIRE_LIBRETRO
+    if (gbz_is_gbz(gamepak_file_large))
+    {
+      gamepak_gbz = gbz_open(gamepak_file_large);
+      if (!gamepak_gbz)
+      {
+        filestream_close(gamepak_file_large);
+        gamepak_file_large = NULL;
+        return -1;
+      }
+    }
+#endif
     /* New ROM load: drop previous game's page-cache/LRU metadata.
      * Keeping stale phy_rom indices across ROM-size changes can cause
      * map_rom_entry() to unmap using out-of-range indices later. */
@@ -2625,6 +2787,10 @@ static s32 load_gamepak_raw(const char *name)
 
     // Round size to 32KB pages
     gamepak_size = (u32)filestream_get_size(gamepak_file_large);
+#ifdef NSPIRE_LIBRETRO
+    if (gamepak_gbz)
+      gamepak_size = gbz_rom_size(gamepak_gbz);
+#endif
     gamepak_size = (gamepak_size + 0x7FFF) & ~0x7FFF;
 
     // Load stuff in 1MB chunks
@@ -2636,6 +2802,8 @@ static s32 load_gamepak_raw(const char *name)
 #ifdef NSPIRE_LIBRETRO
     if (ldblks == 0 && gamepak_size != 0)
     {
+      gbz_close(gamepak_gbz);
+      gamepak_gbz = NULL;
       filestream_close(gamepak_file_large);
       gamepak_file_large = NULL;
       return -1;
@@ -2649,6 +2817,14 @@ static s32 load_gamepak_raw(const char *name)
     for (i = 0; i < ldblks; i++)
     {
       // Load 1MB chunk and map it
+#ifdef NSPIRE_LIBRETRO
+      if (gamepak_gbz)
+      {
+        for (j = 0; j < 32 && i*32 + j < rom_blocks; j++)
+          gbz_read_page(gamepak_gbz, i*32 + j, &gamepak_buffers[i][32 * 1024 * j]);
+      }
+      else
+#endif
       filestream_read(gamepak_file_large, gamepak_buffers[i], gamepak_buffer_blocksize);
       for (j = 0; j < 32 && i*32 + j < rom_blocks; j++)
       {
@@ -2659,6 +2835,10 @@ static s32 load_gamepak_raw(const char *name)
         // Map it to the read handlers now
         map_rom_entry(read, phyn, blkptr, rom_blocks);
       }
+#ifdef NSPIRE_LIBRETRO
+      if (nspire_rom_progress)
+        nspire_rom_progress(i + 1, ldblks);
+#endif
     }
 
     return 0;
@@ -2678,14 +2858,6 @@ u32 load_gamepak(const struct retro_game_info* info, const char *name,
    if (gamepak_buffer_count == 0)
       return -1;
 
-   if (name)
-   {
-      size_t nl = strlen(name);
-      int is_zip = (nl >= 8 && !strcasecmp(name + nl - 8, ".zip.tns"))
-                || (nl >= 4 && !strcasecmp(name + nl - 4, ".zip"));
-      if (is_zip)
-         return -1;
-   }
 #endif
 
    if (load_gamepak_raw(name))

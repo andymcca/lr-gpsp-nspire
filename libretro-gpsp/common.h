@@ -62,6 +62,13 @@
 
 #endif /* ARM_ARCH */
 
+#if defined(NSPIRE_LIBRETRO) && defined(NSPIRE_HOST)
+/* The PC test build's stand-in for Ndless's os.h (tests/host/include). */
+#include <os.h>
+#include <strings.h>
+#include <ctype.h>
+#endif
+
 // Huge thanks to pollux for the heads up on using native file I/O
 // functions on PSP for vastly improved memstick performance.
 

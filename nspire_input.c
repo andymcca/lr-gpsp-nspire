@@ -1,4 +1,6 @@
-/* Ndless keypad input for libretro gpSP core (replaces libretro/input.c). */
+/* Ndless keypad input for libretro gpSP core (replaces libretro/input.c):
+ * the keypad, key bindings (nspire_keys.h), the GBA buttons and hotkeys of a
+ * frame, and menu input with key repeat. */
 
 #include "common.h"
 #include "input.h"
@@ -7,6 +9,9 @@
 #include "gui.h"
 #include "nspire.h"
 #include "nspire_gui_video.h"
+#include "nspire_keys.h"
+#include "nspire_hw.h"
+#include "nspire_brightness.h"
 
 #include <os.h>
 
@@ -19,6 +24,9 @@ unsigned turbo_period      = TURBO_PERIOD_MIN;
 unsigned turbo_pulse_width = TURBO_PULSE_WIDTH_MIN;
 unsigned turbo_a_counter   = 0;
 unsigned turbo_b_counter   = 0;
+
+u32 global_enable_analog = 0;
+u32 analog_sensitivity_level = 4;
 
 static u32 old_key = 0;
 
@@ -53,50 +61,19 @@ static void trigger_key(u32 key)
   }
 }
 
+/* ---- The keypad ---- */
+
 #define TOUCHPAD_KEYS_MASK 0xFF00FFFD
-#define KEY_ENTER 2
-#define KEY_Z 6
-#define KEY_X 17
-#define KEY_3 20
-#define KEY_S 23
-#define KEY_1 24
-#define KEY_Q 34
-#define KEY_6 36
-#define KEY_4 40
-#define KEY_L 49
-#define KEY_9 52
-#define KEY_7 56
-#define KEY_F 65
-#define KEY_A 71
-#define KEY_VAR 82
-#define KEY_5 87
-#define KEY_DEL 90
-#define KEY_SCRATCH 91
-#define KEY_CLICK 98
-#define KEY_DOC 100
-#define KEY_2 101
-#define KEY_MENU 102
-#define KEY_8 103
-#define KEY_ESC 104
-#define KEY_UP 113
-#define KEY_RIGHT 115
-#define KEY_DOWN 117
-#define KEY_LEFT 119
-#define KEY_SHIFT 121
-#define KEY_CTRL 122
 
 static u32 current_keys[4];
 static u32 new_keys[4];
 
-#define getkey(key) (key && (current_keys[(key - 1) >> 5] & (1 << (((key)-1) & 0x1F))))
-#define getnewkey(key) (key && (new_keys[(key - 1) >> 5] & (1 << (((key)-1) & 0x1F))))
-
-static void update_keys(void)
+void keys_poll(void)
 {
   touchpad_report_t report;
-  touchpad_scan(&report);
-
   u32 touchpad_pressed;
+
+  touchpad_scan(&report);
   switch ((tpad_arrow_t)report.arrow)
   {
   case TPAD_ARROW_UP:
@@ -136,140 +113,195 @@ static void update_keys(void)
   new_keys[2] = ~current_keys[2];
   new_keys[3] = ~current_keys[3];
 
-  new_keys[0] &= (current_keys[0] = *(unsigned volatile *)0x900E0010 | (on_key_pressed() ? 0x200 : 0));
-  new_keys[1] &= (current_keys[1] = *(unsigned volatile *)0x900E0014);
-  new_keys[2] &= (current_keys[2] = *(unsigned volatile *)0x900E0018);
+  new_keys[0] &= (current_keys[0] = HW_READ(HW_KEYPAD) | (on_key_pressed() ? 0x200 : 0));
+  new_keys[1] &= (current_keys[1] = HW_READ(HW_KEYPAD + 4));
+  new_keys[2] &= (current_keys[2] = HW_READ(HW_KEYPAD + 8));
   new_keys[3] &= (current_keys[3] =
-                      (*(unsigned volatile *)0x900E001C & TOUCHPAD_KEYS_MASK) | touchpad_pressed);
+                      (HW_READ(HW_KEYPAD + 12) & TOUCHPAD_KEYS_MASK) | touchpad_pressed);
 }
 
-#define KEY_MAP_UP 0
-#define KEY_MAP_DOWN 1
-#define KEY_MAP_LEFT 2
-#define KEY_MAP_RIGHT 3
-#define KEY_MAP_A 4
-#define KEY_MAP_B 5
-#define KEY_MAP_L 6
-#define KEY_MAP_R 7
-#define KEY_MAP_START 8
-#define KEY_MAP_SELECT 9
-#define KEY_MAP_MENU 10
-#define KEY_MAP_FASTFORWARD 11
-#define KEY_MAP_LOADSTATE 12
-#define KEY_MAP_SAVESTATE 13
-#define KEY_MAP_QUICKSAVE 14
-
-u32 gamepad_config_map[16] = {
-    KEY_8, KEY_5, KEY_4, KEY_6, KEY_DEL, KEY_VAR, KEY_SCRATCH, KEY_DOC,
-    KEY_SHIFT, KEY_CTRL, KEY_MENU, KEY_F, KEY_L, KEY_S, KEY_Q, 0,
-};
-
-u32 global_enable_analog = 0;
-u32 analog_sensitivity_level = 4;
-
-extern u32 synchronize_flag;
-extern u32 quick_save_slot;
-extern u32 savestate_slot;
-extern void get_savestate_filename_noshot(u32 slot, u8 *name_buffer);
-
-u32 update_input(void)
+int key_down(unsigned key)
 {
-  uint32_t new_key;
-  u32 gba_buttons;
+  return key && key <= NUM_KEYS && (current_keys[(key - 1) >> 5] >> ((key - 1) & 0x1F)) & 1;
+}
 
-  update_keys();
+int key_pressed(unsigned key)
+{
+  return key && key <= NUM_KEYS && (new_keys[(key - 1) >> 5] >> ((key - 1) & 0x1F)) & 1;
+}
 
-  if (getnewkey(gamepad_config_map[KEY_MAP_MENU]))
-    return menu_wrapper(copy_screen());
+int any_key_down(void)
+{
+  return (current_keys[0] | current_keys[1] | current_keys[2] | current_keys[3]) != 0;
+}
 
-  gba_buttons = 0;
-  if (getkey(KEY_UP) || getkey(gamepad_config_map[KEY_MAP_UP]))
-    gba_buttons |= BUTTON_UP;
-  if (getkey(KEY_DOWN) || getkey(gamepad_config_map[KEY_MAP_DOWN]))
-    gba_buttons |= BUTTON_DOWN;
-  if (getkey(KEY_RIGHT) || getkey(gamepad_config_map[KEY_MAP_RIGHT]))
-    gba_buttons |= BUTTON_RIGHT;
-  if (getkey(KEY_LEFT) || getkey(gamepad_config_map[KEY_MAP_LEFT]))
-    gba_buttons |= BUTTON_LEFT;
-  if (getkey(gamepad_config_map[KEY_MAP_START]))
-    gba_buttons |= BUTTON_START;
-  if (getkey(gamepad_config_map[KEY_MAP_A]))
-    gba_buttons |= BUTTON_A;
-  if (getkey(gamepad_config_map[KEY_MAP_B]))
-    gba_buttons |= BUTTON_B;
-  if (getkey(gamepad_config_map[KEY_MAP_L]))
-    gba_buttons |= BUTTON_L;
-  if (getkey(gamepad_config_map[KEY_MAP_R]))
-    gba_buttons |= BUTTON_R;
-  if (getkey(gamepad_config_map[KEY_MAP_SELECT]))
-    gba_buttons |= BUTTON_SELECT;
+void keys_wait_release(void)
+{
+  do
+  {
+    keys_poll();
+    nspire_wait_until(nspire_ticks() + NSPIRE_TICK_HZ / 100);
+  } while (any_key_down());
+}
 
-  if ((gba_buttons & BUTTON_LEFT) && (gba_buttons & BUTTON_RIGHT))
-    gba_buttons &= ~(BUTTON_LEFT | BUTTON_RIGHT);
-  if ((gba_buttons & BUTTON_DOWN) && (gba_buttons & BUTTON_UP))
-    gba_buttons &= ~(BUTTON_DOWN | BUTTON_UP);
+int binding_held(key_binding b)
+{
+  return b.key && key_down(b.key) && (!b.with || key_down(b.with));
+}
 
-  new_key = gba_buttons;
+static int binding_pressed(key_binding b)
+{
+  return binding_held(b) && (key_pressed(b.key) || (b.with && key_pressed(b.with)));
+}
+
+static int action_held(int action)
+{
+  return binding_held(key_bindings[action][0]) || binding_held(key_bindings[action][1]);
+}
+
+static int key_is_bound(unsigned key)
+{
+  int i, slot;
+  for (i = 0; i < NUM_ACTIONS; i++)
+    for (slot = 0; slot < KEY_SLOTS; slot++)
+      if (key_bindings[i][slot].key == key || key_bindings[i][slot].with == key)
+        return 1;
+  return 0;
+}
+
+static int key_in_held_combo(unsigned key)
+{
+  int i, slot;
+  for (i = FIRST_HOTKEY; i < NUM_ACTIONS; i++)
+    for (slot = 0; slot < KEY_SLOTS; slot++)
+    {
+      key_binding b = key_bindings[i][slot];
+      if (b.with && (b.key == key || b.with == key) && binding_held(b))
+        return 1;
+    }
+  return 0;
+}
+
+int hotkey_pressed(int action)
+{
+  int slot;
+  for (slot = 0; slot < KEY_SLOTS; slot++)
+  {
+    key_binding b = key_bindings[action][slot];
+    if (binding_pressed(b) && (b.with || !key_in_held_combo(b.key)))
+      return 1;
+  }
+  return 0;
+}
+
+key_binding key_capture(void)
+{
+  key_binding b = { 0, 0 };
+  unsigned first = 0, key;
+
+  keys_wait_release();
+  /* The first key pressed, then either another one while it's held (a
+   * combination) or its release (a single key). An arrow or the touchpad
+   * click gives up and returns no key. */
+  while (!first)
+  {
+    keys_poll();
+    for (key = 1; key <= NUM_KEYS && !first; key++)
+      if (key_pressed(key))
+      {
+        if (key_is_reserved(key))
+        {
+          keys_wait_release();
+          return b;
+        }
+        if (key_is_bindable(key))
+          first = key;
+      }
+  }
+  for (;;)
+  {
+    keys_poll();
+    if (!key_down(first))
+    {
+      b.key = (unsigned char)first;
+      break;
+    }
+    for (key = 1; key <= NUM_KEYS; key++)
+      if (key != first && key_pressed(key) && key_is_bindable(key))
+      {
+        b.with = (unsigned char)first;
+        b.key = (unsigned char)key;
+        break;
+      }
+    if (b.key)
+      break;
+  }
+  keys_wait_release();
+  return b;
+}
+
+/* ---- A frame of the game ---- */
+
+/* Reads the keys for a frame: sets the GBA's buttons and returns the hotkeys
+ * just pressed, one bit per action (1 << ACTION_MENU, ...). */
+u32 nspire_input_frame(void)
+{
+  u32 gba_buttons = 0, hotkeys = 0;
+  int up, down, left, right, i;
+
+  keys_poll();
+
+  up = key_down(KEY_UP) || action_held(ACTION_UP);
+  down = key_down(KEY_DOWN) || action_held(ACTION_DOWN);
+  left = key_down(KEY_LEFT) || action_held(ACTION_LEFT);
+  right = key_down(KEY_RIGHT) || action_held(ACTION_RIGHT);
+  /* The number pad's corners are diagonals, unless bound to something. */
+  if (key_down(KEY_7) && !key_is_bound(KEY_7)) up = left = 1;
+  if (key_down(KEY_9) && !key_is_bound(KEY_9)) up = right = 1;
+  if (key_down(KEY_1) && !key_is_bound(KEY_1)) down = left = 1;
+  if (key_down(KEY_3) && !key_is_bound(KEY_3)) down = right = 1;
+  if (up && down)
+    up = down = 0;
+  if (left && right)
+    left = right = 0;
+
+  if (up)    gba_buttons |= BUTTON_UP;
+  if (down)  gba_buttons |= BUTTON_DOWN;
+  if (left)  gba_buttons |= BUTTON_LEFT;
+  if (right) gba_buttons |= BUTTON_RIGHT;
+  if (action_held(ACTION_A))      gba_buttons |= BUTTON_A;
+  if (action_held(ACTION_B))      gba_buttons |= BUTTON_B;
+  if (action_held(ACTION_L))      gba_buttons |= BUTTON_L;
+  if (action_held(ACTION_R))      gba_buttons |= BUTTON_R;
+  if (action_held(ACTION_START))  gba_buttons |= BUTTON_START;
+  if (action_held(ACTION_SELECT)) gba_buttons |= BUTTON_SELECT;
 
   if (serial_mode == SERIAL_MODE_GBP)
   {
     if (frame_counter > 20 && frame_counter < 100)
-      new_key = (frame_counter % 3) ? 0x3FF : 0x30F;
+      gba_buttons = (frame_counter % 3) ? 0x3FF : 0x30F;
   }
 
-  if ((new_key | old_key) != old_key)
-    trigger_key(new_key);
-
-  old_key = new_key;
+  if ((gba_buttons | old_key) != old_key)
+    trigger_key(gba_buttons);
+  old_key = gba_buttons;
   write_ioreg(REG_P1, (~old_key) & 0x3FF);
 
-  if (getnewkey(gamepad_config_map[KEY_MAP_LOADSTATE]))
-  {
-    u8 current_savestate_filename[512];
+  for (i = FIRST_HOTKEY; i < NUM_ACTIONS; i++)
+    if (hotkey_pressed(i))
+      hotkeys |= 1u << i;
+  /* Without a key for the menu, the menu key opens it, so it can't get lost. */
+  if (!key_bindings[ACTION_MENU][0].key && !key_bindings[ACTION_MENU][1].key &&
+      key_pressed(KEY_MENU))
+    hotkeys |= 1u << ACTION_MENU;
+  return hotkeys;
+}
 
-    if (!gamepak_filename[0])
-      return 0;
-    get_savestate_filename_noshot(savestate_slot, current_savestate_filename);
-    /* Do not use load_state_wrapper: tiny not_crt0_savedsp stack overflows BSON path. */
-    if (load_state(current_savestate_filename))
-      return 1;
-    return 0;
-  }
-
-  if (getnewkey(gamepad_config_map[KEY_MAP_SAVESTATE]))
-  {
-    u8 current_savestate_filename[512];
-    u16 *current_screen = copy_screen();
-
-    if (!gamepak_filename[0])
-      return 0;
-    get_savestate_filename_noshot(savestate_slot, current_savestate_filename);
-    save_state(current_savestate_filename, current_screen);
-    return 0;
-  }
-
-  if (getnewkey(gamepad_config_map[KEY_MAP_FASTFORWARD]))
-  {
-    synchronize_flag ^= 1;
-    return 0;
-  }
-
-  if (getnewkey(gamepad_config_map[KEY_MAP_QUICKSAVE]))
-  {
-    u8 current_savestate_filename[512];
-    u16 *current_screen = copy_screen();
-
-    if (gamepak_filename[0])
-    {
-      get_savestate_filename_noshot(savestate_slot, current_savestate_filename);
-      save_state(current_savestate_filename, current_screen);
-      quick_save_slot = savestate_slot + 1;
-      save_config_file();
-    }
-    quit();
-  }
-
-  return 0;
+/* The buttons the game sees while it's paused (menus, loading). */
+void nspire_input_release_all(void)
+{
+  old_key = 0;
+  write_ioreg(REG_P1, 0x3FF);
 }
 
 void init_input(void) {}
@@ -297,40 +329,76 @@ unsigned input_write_savestate(u8 *dst)
   return (unsigned int)(dst - startp);
 }
 
-u32 key_scan(void)
-{
-  u32 i;
+/* ---- Menus ---- */
 
-  update_keys();
-  while (current_keys[0] || current_keys[1] || current_keys[2] || current_keys[3])
-    update_keys();
-  while (!current_keys[0] && !current_keys[1] && !current_keys[2] && !current_keys[3])
-    update_keys();
-  for (i = 1; i <= 128; i++)
-  {
-    if ((i < KEY_UP || i > KEY_LEFT) && i != KEY_CLICK && getkey(i))
+static gui_action_type held_direction = CURSOR_NONE;
+static u32 repeat_at;
+static unsigned repeats;
+
+int nspire_gui_digits_move = 1;
+
+int nspire_digit_pressed(void)
+{
+  static const unsigned char digits[10] =
+    { KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0 };
+  int i;
+
+  for (i = 0; i < 10; i++)
+    if (key_pressed(digits[i]))
       return i;
-  }
-  return 0;
+  return -1;
 }
 
+unsigned gui_repeat_count(void)
+{
+  return repeats;
+}
+
+/* Arrows (or 8 2 5 4 6, except in the file list) move and repeat while
+ * held: after 0.4 s, 15 times a second. The brightness keys work here too. */
 gui_action_type get_gui_input(void)
 {
-  update_keys();
+  gui_action_type direction = CURSOR_NONE;
+  u32 now;
 
-  if (getnewkey(KEY_UP) || getnewkey(KEY_8))
-    return CURSOR_UP;
-  if (getnewkey(KEY_DOWN) || getnewkey(KEY_5) || getnewkey(KEY_2))
-    return CURSOR_DOWN;
-  if (getnewkey(KEY_RIGHT) || getnewkey(KEY_6))
-    return CURSOR_RIGHT;
-  if (getnewkey(KEY_LEFT) || getnewkey(KEY_4))
-    return CURSOR_LEFT;
-  if (getnewkey(KEY_ESC))
-    return CURSOR_BACK;
-  if (getnewkey(KEY_CLICK) || getnewkey(KEY_ENTER))
+  keys_poll();
+
+  if (hotkey_pressed(ACTION_BRIGHTER))
+    nspire_brightness_step(1);
+  if (hotkey_pressed(ACTION_DIMMER))
+    nspire_brightness_step(-1);
+
+  if (key_pressed(KEY_CLICK) || key_pressed(KEY_ENTER))
     return CURSOR_SELECT;
-  if (getnewkey(KEY_MENU) || getnewkey(gamepad_config_map[10]))
+  if (key_pressed(KEY_ESC))
+    return CURSOR_BACK;
+  if (key_pressed(KEY_MENU) || hotkey_pressed(ACTION_MENU))
     return CURSOR_EXIT;
+  if (key_pressed(KEY_DEL))
+    return CURSOR_CLEAR;
+
+  if (key_down(KEY_UP) || (nspire_gui_digits_move && key_down(KEY_8)))
+    direction = CURSOR_UP;
+  else if (key_down(KEY_DOWN) || (nspire_gui_digits_move && (key_down(KEY_5) || key_down(KEY_2))))
+    direction = CURSOR_DOWN;
+  else if (key_down(KEY_RIGHT) || (nspire_gui_digits_move && key_down(KEY_6)))
+    direction = CURSOR_RIGHT;
+  else if (key_down(KEY_LEFT) || (nspire_gui_digits_move && key_down(KEY_4)))
+    direction = CURSOR_LEFT;
+
+  now = nspire_ticks();
+  if (direction != held_direction)
+  {
+    held_direction = direction;
+    repeat_at = now + NSPIRE_TICK_HZ * 2 / 5;
+    repeats = 0;
+    return direction;
+  }
+  if (direction != CURSOR_NONE && (s32)(now - repeat_at) >= 0)
+  {
+    repeat_at = now + NSPIRE_TICK_HZ / 15;
+    repeats++;
+    return direction;
+  }
   return CURSOR_NONE;
 }

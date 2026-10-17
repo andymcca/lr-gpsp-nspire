@@ -1,0 +1,4 @@
+# Starts with no game: the file list.
+wait 1
+shot list
+quit

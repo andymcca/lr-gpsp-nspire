@@ -2662,12 +2662,32 @@ u8 function_cc *block_lookup_address_dual(u32 pc)
   }
 }
 
+#ifdef NSPIRE_LIBRETRO
+/* arm_stub.S: back to whatever called execute_arm_translate. */
+extern u8 arm_return_to_main[];
+
+/* No code can run at pc (the lookup's (u8*)~0: no memory, I/O, save
+ * memory...), or it couldn't be translated: stop there (cpu.h) rather than
+ * jump to that marker, which crashed the calculator. The lookups get the
+ * PC with its low bits as the branch left them (Thumb bit, ARM + 2). */
+static u8 *nspire_stop_at(u32 pc)
+{
+  nspire_bad_jump = 1;
+  nspire_bad_jump_pc = pc;
+  return arm_return_to_main;
+}
+#endif
+
 u8 function_cc *block_lookup_address_arm(u32 pc)
 {
   unsigned i;
   for (i = 0; i < 4; i++) {
     u8 *ret = block_lookup_translate_arm(pc);
     if (ret) {
+#ifdef NSPIRE_LIBRETRO
+      if (ret == (u8 *)(~0))
+        return nspire_stop_at(pc & ~3);
+#endif
       translate_icache_sync();
       return ret;
     }
@@ -2675,7 +2695,11 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
 
   printf("bad jump %x (%x)\n", pc, reg[REG_PC]);
   fflush(stdout);
+#ifdef NSPIRE_LIBRETRO
+  return nspire_stop_at(pc & ~3);
+#else
   return NULL;
+#endif
 }
 
 u8 function_cc *block_lookup_address_thumb(u32 pc)
@@ -2684,13 +2708,21 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
   for (i = 0; i < 4; i++) {
     u8 *ret = block_lookup_translate_thumb(pc);
     if (ret) {
+#ifdef NSPIRE_LIBRETRO
+      if (ret == (u8 *)(~0))
+        return nspire_stop_at(pc & ~1);
+#endif
       translate_icache_sync();
       return ret;
     }
   }
   printf("bad jump %x (%x)\n", pc, reg[REG_PC]);
   fflush(stdout);
+#ifdef NSPIRE_LIBRETRO
+  return nspire_stop_at(pc & ~1);
+#else
   return NULL;
+#endif
 }
 
 // Potential exit point: If the rd field is pc for instructions is 0x0F,
@@ -3156,9 +3188,11 @@ bool translate_block_arm(u32 pc, bool ram_region)
     }
     else
     {
-      /* Deferred patch list must match arm_emit.h: only PCs emitted as direct
-       * PC-relative branches get patched here. Partial: BIOS + cart ROM only.
-       * Classic: same plus IW/EW RAM (lookup never returns (u8*)~0 for these). */
+      /* Linked directly (patched once the target is translated): BIOS and
+       * cart ROM; with Classic SMC also IW/EW RAM, as a full flush drops
+       * every block on a RAM write. Partial SMC drops only the written
+       * block, so a direct link into RAM code could run stale code: those
+       * exits go through the PC lookup below. */
 #if defined(NSPIRE_LIBRETRO)
       if ((nspire_dynarec_ram_policy
             && GPSP_PC_RELATIVE_TRANS_REGION(branch_target))
@@ -3176,6 +3210,17 @@ bool translate_block_arm(u32 pc, bool ram_region)
         external_block_exits[external_block_exit_position].branch_source =
          block_exits[i].branch_source;
         external_block_exit_position++;
+      }
+      else
+      {
+        /* Not linked: the branch looks its target up by PC, as BX does.
+         * Its placeholder (B +0) would run the next host instructions
+         * instead, so Partial SMC froze or crashed games whose IWRAM code
+         * branches between its blocks (Pokemon Emerald at boot). */
+        generate_branch_patch_unconditional(block_exits[i].branch_source,
+         translation_ptr);
+        generate_update_pc(branch_target);
+        generate_indirect_branch_no_cycle_update(arm);
       }
     }
   }
@@ -3351,6 +3396,17 @@ bool translate_block_thumb(u32 pc, bool ram_region)
         external_block_exits[external_block_exit_position].branch_source =
          block_exits[i].branch_source;
         external_block_exit_position++;
+      }
+      else
+      {
+        /* Not linked: the branch looks its target up by PC, as BX does.
+         * Its placeholder (B +0) would run the next host instructions
+         * instead, so Partial SMC froze or crashed games whose IWRAM code
+         * branches between its blocks (Pokemon Emerald at boot). */
+        generate_branch_patch_unconditional(block_exits[i].branch_source,
+         translation_ptr);
+        generate_update_pc(branch_target);
+        generate_indirect_branch_no_cycle_update(thumb);
       }
     }
   }

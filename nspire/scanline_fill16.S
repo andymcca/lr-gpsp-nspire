@@ -1,6 +1,9 @@
 @ Fast u16 scanline fill for ARM926EJ-S (32-bit stmia stores pairs of identical RGB565).
 @ void video_fill_u16_strip_arm(u16 *dst, u32 nh, u32 value);
 @ r0 = dst, r1 = halfword count (0 allowed), r2 = u16 in low 16 bits
+@ dst only has to be halfword aligned: video.cc fills from window edges,
+@ which can be odd pixels. stmia needs a word address (the calculator
+@ checks alignment and crashes otherwise), so an odd pixel is stored first.
 
 .arch armv5te
 .arm
@@ -17,6 +20,9 @@ video_fill_u16_strip_arm:
 	ldr	r12, .Lffff
 	and	r12, r2, r12
 	orr	r2, r12, r12, lsl #16
+	tst	r0, #2			@ odd pixel: store it alone
+	strneh	r2, [r0], #2
+	subne	r1, r1, #1
 	mov	r3, r2
 	mov	r4, r2
 	mov	r5, r2

@@ -218,6 +218,8 @@ Implementation summary:
 - `gba_branch_emit_pc_relative_link` in `libretro-gpsp/arm/arm_emit.h` (Ndless build; mirrored under `temp/arm/`) expands to `1` when policy is non-zero.
 - `nspire_dynarec_ram_policy_menu_hook` + `nspire_emulator_options_apply` handle cache flush when the user toggles the option.
 
+**In this source (2026-10):** `arm_emit.h` has no `gba_branch_emit_pc_relative_link`. Every direct branch is emitted as a placeholder that `translate_block` patches, and Partial patched only BIOS and cart ROM targets, so a branch from RAM code to another RAM block kept its placeholder (`B +0`) and ran the next host instructions instead: calls and loops in IWRAM code were skipped (issues #3-#5; Pokemon Emerald froze after loading a state). Exits that aren't linked now jump to a PC lookup (as BX does) emitted after the block. Also, CPU stores to translated RAM go through `arm_stub.S`, which calls `flush_translation_cache_ram` with either setting; only DMA takes the partial path. `tests/arm/dynarec_test.c` covers both settings; DEVNOTES.md has the story.
+
 ## Verification
 
 - **Mario Golf:** background / shot UI wrong with partial flush before fixes; **correct** after `INITIAL_TOP_TAG` fix (and DMA gate remains safe hardening).
