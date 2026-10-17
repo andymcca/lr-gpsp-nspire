@@ -269,8 +269,10 @@ in `~/nspire/build/testroms/gba/gba-tests`):
 
 `tests/calc_checks.py` (needs the Ndless toolchain) checks the calculator
 build's disassembly for what a PC can't show: that `menu()` syncs the caches
-before its first trampoline call, and that video.cc's fill stores an odd
-first pixel alone before its 16-byte stores.
+before its first trampoline call, that video.cc's fill stores an odd
+first pixel alone before its 16-byte stores, that the code every interrupt
+runs is one stretch smaller than the instruction cache, and that IWRAM is
+where the dynarec's fast push/pop expects it.
 
 `tests/arm/run.sh` (needs the Ndless toolchain and qemu-arm) builds code for
 the calculator's CPU and runs it under qemu-arm: the one-pass blended
@@ -286,7 +288,16 @@ run (it has to stop there). With the game, its BIOS and a save state
 in `$GBA_GAMES` (see `tests/arm/run.sh`), Pokemon Emerald is played from the
 state into a wild battle with both renderers, both SMC settings, 8 and 32 MB
 ROM buffers and as a zip: all must reach the same battle frame for frame.
-A damaged Advance Wars there has to stop at its bad jump.
+A damaged Advance Wars there has to stop at its bad jump. Eight scenes
+(Advance Wars from the owner's state and from power-on, Emerald, Fire
+Emblem, Golden Sun, Minish Cap) are played with the picture's lines drawn
+in batches and line by line, with both renderers: every frame must be the
+same.
+
+`tests/speed_scenes.sh` estimates from the PC how fast those scenes run on
+the calculator (milliseconds a frame for the game, drawing and the
+picture), with `tests/calc_speed.sh`'s model of the ARM926; DEVNOTES.md
+("Speed") has the numbers.
 
 ## Releases
 

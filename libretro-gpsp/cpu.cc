@@ -1362,7 +1362,7 @@ const u32 cpu_modes[16] =
 
 u32 instruction_count = 0;
 
-void set_cpu_mode(cpu_mode_type new_mode)
+NSPIRE_HOT void set_cpu_mode(cpu_mode_type new_mode)
 {
   cpu_mode_type cpu_mode = reg[CPU_MODE];
 
@@ -1399,13 +1399,13 @@ void set_cpu_mode(cpu_mode_type new_mode)
     (read_ioreg(REG_IE) & read_ioreg(REG_IF)))
 
 // Returns whether the CPU has a pending interrupt.
-cpu_alert_type check_interrupt() {
+NSPIRE_HOT cpu_alert_type check_interrupt() {
   return (cpu_has_interrupt()) ? CPU_ALERT_IRQ : CPU_ALERT_NONE;
 }
 
 // Checks for pending IRQs and raises them. This changes the CPU mode
 // which means that it must be called with a valid CPU state.
-u32 check_and_raise_interrupts()
+NSPIRE_HOT u32 check_and_raise_interrupts()
 {
   // Check any IRQ flag pending, IME and CPSR-IRQ enabled
   if (cpu_has_interrupt())
@@ -1435,7 +1435,7 @@ u32 check_and_raise_interrupts()
 // It simply updates IF register and returns whether the IRQ needs
 // to be raised (that is, IE/IME/CPSR enable the IRQ).
 // Safe to call via dynarec without proper registers saved.
-cpu_alert_type flag_interrupt(irq_type irq_raised)
+NSPIRE_HOT cpu_alert_type flag_interrupt(irq_type irq_raised)
 {
   // Flag interrupt
   write_ioreg(REG_IF, read_ioreg(REG_IF) | irq_raised);

@@ -30,23 +30,28 @@ ARCH  := -marm -mcpu=arm926ej-s
 CALC_FLAGS := -O3 -std=c99 -msoft-float -funsigned-char -fno-common $(ARCH) -fomit-frame-pointer \
               -DNSPIRE_BUILD -DNSPIRE_LIBRETRO -DNSPIRE_NO_AUDIO -DARM_ARCH \
               -I$(CORE) -I$(CORE)/libretro -I$(CORE)/libretro/libretro-common/include \
-              -I$(ROOT) -I$(ROOT)/nspire -Wall
-TEST_FLAGS := -O2 $(ARCH) -Wall
+              -I$(ROOT) -I$(ROOT)/nspire -Wall -MMD -MP
+TEST_FLAGS := -O2 $(ARCH) -Wall -MMD -MP
 
-# The core as the calculator's Makefile builds it (minus -flto).
+# The core as the calculator's Makefile builds it.
 CORE_DEFS  := -DNSPIRE_BUILD -DNSPIRE_LIBRETRO -DNSPIRE_NO_AUDIO -DNSPIRE_HOST -DARM_ARCH \
               -DHAVE_DYNAREC=1 -DSMALL_TRANSLATION_CACHE -DROM_BUFFER_SIZE=2
 CORE_INCS  := -Ishim -I../host/include -I$(CORE) -I$(CORE)/libretro -I$(COMM)/include \
               -I$(ROOT) -I$(ROOT)/nspire -I$(ZLIB)
+# The speed harness is linked with link-time optimization, as the calculator
+# build is (cross-file inlining changes what the hot code costs); the objects
+# keep plain code too (-ffat-lto-objects) for the other tests' links.
+LTO := -flto -ffat-lto-objects
 CORE_FLAGS := -O3 -msoft-float -funsigned-char -fno-common $(ARCH) -fomit-frame-pointer \
-              -ffast-math -D_GNU_SOURCE $(CORE_DEFS) $(CORE_INCS) -w
+              -ffast-math -fno-reorder-functions -D_GNU_SOURCE $(CORE_DEFS) $(CORE_INCS) -w -MMD -MP \
+              $(LTO)
 
 CORE_C := main gba_memory savestate sound cheats memmap serial gbp rfu serial_proto gba_cc_lut \
           cpu_threaded
 COMM_C := compat/compat_posix_string compat/compat_strl compat/fopen_utf8 encodings/encoding_utf \
           file/file_path file/file_path_io streams/file_stream string/stdstring time/rtime \
           vfs/vfs_implementation
-CORE_FRONT := nspire_stubs nspire_zip nspire_gbz nspire_video_renderer_dispatch
+CORE_FRONT := nspire_stubs nspire_zip nspire_gbz nspire_video_renderer_dispatch nspire_lines
 CORE_OBJS := $(addprefix $(BUILD)/core_,$(addsuffix .o,$(CORE_C))) $(BUILD)/core_cpu.o \
              $(addprefix $(BUILD)/comm_,$(addsuffix .o,$(notdir $(COMM_C)))) \
              $(addprefix $(BUILD)/front_,$(addsuffix .o,$(CORE_FRONT))) \
@@ -101,14 +106,14 @@ $(BUILD)/core_stubs.o: core_stubs.c | $(BUILD)
 $(BUILD)/bios_data.o: $(CORE)/bios_data.S | $(BUILD)
 	arm-none-eabi-gcc $(ARCH) -I$(CORE) -c $< -o $@
 $(BUILD)/arm_stub.o: $(CORE)/arm/arm_stub.S | $(BUILD)
-	arm-none-eabi-gcc $(ARCH) $(CORE_DEFS) $(CORE_INCS) -c $< -o $@
+	arm-none-eabi-gcc $(ARCH) $(CORE_DEFS) $(CORE_INCS) -MMD -MP -c $< -o $@
 $(BUILD)/video_blend.o: $(ROOT)/nspire/video_blend.S | $(BUILD)
-	arm-none-eabi-gcc $(ARCH) $(CORE_DEFS) $(CORE_INCS) -c $< -o $@
+	arm-none-eabi-gcc $(ARCH) $(CORE_DEFS) $(CORE_INCS) -MMD -MP -c $< -o $@
 $(BUILD)/scanline_fill16.o: $(ROOT)/nspire/scanline_fill16.S | $(BUILD)
 	arm-none-eabi-gcc $(ARCH) -c $< -o $@
 # The renderers renamed as in the calculator's Makefile.
 $(BUILD)/video_cc_renderer.o: $(CORE)/video.cc | $(BUILD)
-	arm-none-eabi-g++ $(CORE_FLAGS) -std=gnu++11 -fno-exceptions -fno-rtti \
+	arm-none-eabi-g++ $(CORE_FLAGS) $(VIDEO_OPT) -std=gnu++11 -fno-exceptions -fno-rtti \
 	-Dupdate_scanline=video_cc_update_scanline \
 	-Dvideo_reload_counters=video_cc_video_reload_counters \
 	-Dgba_screen_pixels=video_cc_gba_screen_pixels \
@@ -147,7 +152,7 @@ PERF_FRONT := nspire_video_present nspire_video_ui nspire_blend nspire_turn nspi
 PERF_OBJS := $(filter-out $(BUILD)/core_stubs.o,$(CORE_OBJS)) $(BUILD)/perf_stubs.o \
              $(addprefix $(BUILD)/front_,$(addsuffix .o,$(PERF_FRONT))) $(BUILD)/upscale_aspect.o
 $(BUILD)/perf: $(BUILD)/perf.o $(PERF_OBJS)
-	arm-none-eabi-g++ $(ARCH) -specs=rdimon.specs $^ $(LIBZ) -lm -o $@
+	arm-none-eabi-g++ $(ARCH) -O3 -flto -fno-reorder-functions -specs=rdimon.specs $^ $(LIBZ) -lm -o $@
 
 # The test ROM: ARM code at the cartridge's address, as a plain image.
 $(BUILD)/ram_code.gba: rom/ram_code.S | $(BUILD)
@@ -162,5 +167,8 @@ $(BUILD)/bad_jump_arm.gba: rom/bad_jump.S | $(BUILD)
 
 clean:
 	rm -rf $(BUILD)
+
+# Header dependencies (-MMD): a changed arm_emit.h rebuilds cpu_threaded.
+-include $(wildcard $(BUILD)/*.d)
 
 .PHONY: all clean

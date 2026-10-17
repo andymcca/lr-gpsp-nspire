@@ -912,6 +912,12 @@ cpu_alert_type function_cc write_io_register16(u32 address, u32 value)
 {
   uint32_t ioreg = ((address & 0xffffff) >> 1);
   value &= 0xffff;
+#ifdef NSPIRE_BUILD
+  // Display registers (not DISPSTAT/VCOUNT): lines waiting to be drawn
+  // first (video.h)
+  if (ioreg < 0x2C && (ioreg - REG_DISPSTAT) > 1)
+    nspire_video_write();
+#endif
   switch(ioreg)
   {
     case REG_DISPCNT:
@@ -1520,6 +1526,12 @@ void function_cc write_gpio(u32 address, u32 value) {
 
 #define write_gpio32()                                                        \
 
+#ifdef NSPIRE_BUILD
+#define nspire_video_write_c() nspire_video_write()
+#else
+#define nspire_video_write_c()
+#endif
+
 #define write_memory(type)                                                    \
   switch(address >> 24)                                                       \
   {                                                                           \
@@ -1539,11 +1551,13 @@ void function_cc write_gpio(u32 address, u32 value) {
                                                                               \
     case 0x05:                                                                \
       /* palette RAM */                                                       \
+      nspire_video_write_c();                                                 \
       write_palette##type(address & 0x3FF, value);                            \
       break;                                                                  \
                                                                               \
     case 0x06:                                                                \
       /* VRAM */                                                              \
+      nspire_video_write_c();                                                 \
       address &= 0x1FFFF;                                                     \
       if(address >= 0x18000)                                                  \
         address -= 0x8000;                                                    \
@@ -1553,6 +1567,7 @@ void function_cc write_gpio(u32 address, u32 value) {
                                                                               \
     case 0x07:                                                                \
       /* OAM RAM */                                                           \
+      nspire_video_write_c();                                                 \
       if (type != 8) {                                                        \
         reg[OAM_UPDATED] = 1;                                                 \
         address##type(oam_ram, address & 0x3FF) = eswap##type(value);         \
@@ -2188,6 +2203,16 @@ cpu_alert_type dma_transfer(unsigned dma_chan, int *usedcycles)
   dma_region_type src_reg1 = dma_region_map[src_end >> 24];
   dma_region_type dst_reg0 = dma_region_map[dst_ptr >> 24];
   dma_region_type dst_reg1 = dma_region_map[dst_end >> 24];
+
+#ifdef NSPIRE_BUILD
+  // Into palette, VRAM, OAM or the display registers (not the sound FIFOs):
+  // lines waiting to be drawn first (video.h)
+  if (nspire_lines_waiting &&
+      ((dst_ptr >> 24) - 5 < 3 || (dst_end >> 24) - 5 < 3 ||
+       ((dst_ptr >> 24) == 4 && (dst_ptr & 0xFFFFFF) < 0x58) ||
+       ((dst_end >> 24) == 4 && (dst_end & 0xFFFFFF) < 0x58)))
+    nspire_flush_lines();
+#endif
 
   if (src_reg0 == src_reg1 && dst_reg0 == dst_reg1)
     ret = dma_transfer_copy(dmach, src_ptr, dst_ptr, byte_length >> tfsizes);

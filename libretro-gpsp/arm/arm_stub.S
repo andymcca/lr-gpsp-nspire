@@ -9,7 +9,12 @@
 symbol:                  \
 _##symbol:
 
+#ifdef NSPIRE_BUILD
+@ With update_gba and the other code every interrupt runs (common.h)
+.section .text.hot.gpsp,"ax",%progbits
+#else
 .text
+#endif
 .align 2
 
 #define REG_R0            (0 * 4)
@@ -167,6 +172,34 @@ _##symbol:
   bl function                                                                ;\
   ldmia sp!, { call_c_saved_regs }                                           ;\
 
+#ifdef NSPIRE_BUILD
+@ Looks up the translated block for r0 (the PC as block_lookup_address_MODE
+@ takes it) and leaves it in r0: ROM and BIOS blocks from nspire_block_cache
+@ (cpu_threaded.c) when they're there, the rest from block_lookup_address_*,
+@ which fills it. Clobbers r1, r2, lr and the flags (call with them saved).
+#define cache_key_arm()    bic r1, r0, #3
+#define cache_key_thumb()  bic r1, r0, #1; orr r1, r1, #1
+
+#define cached_lookup(mode)                                                  ;\
+  cache_key_##mode()                      /* r1 = key                      */;\
+  cmp r1, #0x0E000000                     /* past the ROM: never kept      */;\
+  bhs 5f                                                                     ;\
+  mov r2, r1, lsl #23                                                        ;\
+  mov r2, r2, lsr #24                     /* entry (key >> 1) & 255        */;\
+  ldr lr, =nspire_block_cache                                                ;\
+  add r2, lr, r2, lsl #3                                                     ;\
+  ldr lr, [r2]                                                               ;\
+  cmp lr, r1                                                                 ;\
+  ldreq r0, [r2, #4]                                                         ;\
+  beq 6f                                                                     ;\
+5:                                                                           ;\
+  call_c_function(block_lookup_address_##mode)                               ;\
+6:                                                                           ;\
+
+#else
+#define cached_lookup(mode) call_c_function(block_lookup_address_##mode)
+#endif
+
 
 @ Update the GBA hardware (video, sound, input, etc)
 
@@ -220,14 +253,10 @@ defsymbl(arm_update_gba_##name)                                              ;\
   bne 2f                                  /* if so load Thumb PC           */;\
                                                                              ;\
   load_registers_arm()                    /* load ARM regs                 */;\
-  call_c_function(block_lookup_address_arm)                                  ;\
-  restore_flags()                                                            ;\
-  bx r0                                   /* jump to new ARM block         */;\
+  b arm_lookup_saved_arm                  /* jump to new ARM block         */;\
 2:                                                                           ;\
   load_registers_thumb()                  /* load Thumb regs               */;\
-  call_c_function(block_lookup_address_thumb)                                ;\
-  restore_flags()                                                            ;\
-  bx r0                                   /* jump to new ARM block         */;\
+  b arm_lookup_saved_thumb                /* jump to new Thumb block       */;\
 .size arm_update_gba_##name, .-arm_update_gba_##name
 
 arm_update_gba_builder(arm, arm, straight)
@@ -238,6 +267,7 @@ arm_update_gba_builder(idle_thumb, thumb, add)
 
 arm_update_gba_builder(check_arm, arm, check)
 arm_update_gba_builder(check_thumb, thumb, check)
+.ltorg
 
 @ A block's exit (Nspire, arm_emit.h generate_branch_update):
 @   bl arm_check_update_MODE ; .word PC ; b next block
@@ -274,13 +304,17 @@ cheat_hook_builder(thumb)
 
 defsymbl(arm_indirect_branch_arm)
   save_flags()
-  call_c_function(block_lookup_address_arm)
+@ The rest of every lookup with the flags already in reg_flags (the update,
+@ CPSR/SPSR and dual branch stubs come here: one copy of cached_lookup).
+arm_lookup_saved_arm:
+  cached_lookup(arm)
   restore_flags()
   bx r0
 
 defsymbl(arm_indirect_branch_thumb)
   save_flags()
-  call_c_function(block_lookup_address_thumb)
+arm_lookup_saved_thumb:
+  cached_lookup(thumb)
   restore_flags()
   bx r0
 
@@ -289,27 +323,21 @@ defsymbl(arm_indirect_branch_dual_arm)
   tst r0, #0x01                           @ check lower bit
   bne 1f                                  @ if set going to Thumb mode
   add r0, #2                              @ two LSB are cleared after
-  call_c_function(block_lookup_address_arm)
-  restore_flags()
-  bx r0                                   @ keep executing arm code
+  b arm_lookup_saved_arm                  @ keep executing arm code
 1:
   store_registers_arm()                   @ save out ARM registers
   ldr r1, [reg_base, #REG_CPSR]           @ load cpsr
   load_registers_thumb()                  @ load in Thumb registers
   orr r1, r1, #0x20                       @ set Thumb mode
   str r1, [reg_base, #REG_CPSR]           @ store flags
-  call_c_function(block_lookup_address_thumb)
-  restore_flags()
-  bx r0       
+  b arm_lookup_saved_thumb
 .size arm_indirect_branch_dual_arm, .-arm_indirect_branch_dual_arm
 
 defsymbl(arm_indirect_branch_dual_thumb)
   save_flags()
   tst r0, #0x01                           @ check lower bit
   beq 1f                                  @ if set going to ARM mode
-  call_c_function(block_lookup_address_thumb)
-  restore_flags()
-  bx r0                                   @ keep executing thumb code
+  b arm_lookup_saved_thumb                @ keep executing thumb code
 1:
   store_registers_thumb()                 @ save out Thumb registers
   ldr r1, [reg_base, #REG_CPSR]           @ load cpsr
@@ -317,10 +345,9 @@ defsymbl(arm_indirect_branch_dual_thumb)
   bic r1, r1, #0x20                       @ clear Thumb mode
   str r1, [reg_base, #REG_CPSR]           @ store flags
   add r0, #2                              @ two LSB are cleared after
-  call_c_function(block_lookup_address_arm)
-  restore_flags()
-  bx r0
+  b arm_lookup_saved_arm
 .size arm_indirect_branch_dual_thumb, .-arm_indirect_branch_dual_thumb
+.ltorg
 
 @ Update the cpsr.
 
@@ -355,9 +382,7 @@ defsymbl(execute_store_cpsr)
   add pc, lr, #12                         @ return (skip data)
 
 1:
-  call_c_function(block_lookup_address_arm)
-  restore_flags()
-  bx r0                                   @ return to PC ARM address
+  b arm_lookup_saved_arm                  @ return to PC ARM address
 .size execute_store_cpsr, .-execute_store_cpsr
 
 @ Restore the cpsr from the mode spsr and mode shift.
@@ -386,15 +411,11 @@ defsymbl(execute_spsr_restore)
 
   load_registers_arm()                    @ restore ARM registers
 2:
-  call_c_function(block_lookup_address_arm)
-  restore_flags()
-  bx r0
+  b arm_lookup_saved_arm
 
 1:
   load_registers_thumb()                  @ load Thumb registers
-  call_c_function(block_lookup_address_thumb)
-  restore_flags()
-  bx r0
+  b arm_lookup_saved_thumb
 
 
 @ Setup the mode transition work for calling an SWI.
@@ -650,6 +671,33 @@ ext_store_palette_u32:
   add pc, lr, #4                          // return
 
 
+#ifdef NSPIRE_BUILD
+@ Stores to palette, VRAM and OAM while picture lines wait to be drawn
+@ (video.h): draw them first, then store as usual. update_gba's HBlank puts
+@ these in st_lookup_tables (nspire_video_line_ready) and drawing puts the
+@ usual handlers back, so stores pay nothing while no lines wait.
+@ r0: address, r1: value, lr: the PC word (or the return, for _safe).
+
+#define video_flush_store(handler)                                           ;\
+handler##_flush:                                                             ;\
+  save_flags()                                                               ;\
+  stmdb sp!, { r0, r1, r2, r3, r12, lr }                                     ;\
+  bl nspire_flush_lines                                                      ;\
+  ldmia sp!, { r0, r1, r2, r3, r12, lr }                                     ;\
+  restore_flags()                                                            ;\
+  b handler                                                                  ;\
+
+#define video_flush_stores(store_type)                                       ;\
+video_flush_store(ext_store_palette_u##store_type)                           ;\
+video_flush_store(ext_store_vram_u##store_type)                              ;\
+video_flush_store(ext_store_oam_ram_u##store_type)                           ;\
+
+video_flush_stores(8)
+video_flush_stores(16)
+video_flush_stores(32)
+video_flush_stores(32_safe)
+#endif
+
 @ This is a store that is executed in a strm case (so no SMC checks in-between)
 
 ext_store_u32_safe:
@@ -728,16 +776,17 @@ cpu_sleep_loop:
   tst r1, #0x20                           @ see if Thumb bit is set
   bne 2f
 
-  call_c_function(block_lookup_address_arm)
+  cached_lookup(arm)
   load_registers_arm()
   extract_flags()
   bx r0                                   @ jump to new ARM block
 
 2:
-  call_c_function(block_lookup_address_thumb)
+  cached_lookup(thumb)
   load_registers_thumb()
   extract_flags()
   bx r0                                   @ jump to new Thumb block
+.ltorg
 
 
 resume_pc:
@@ -925,6 +974,19 @@ defsymbl(st_handler_functions)
   store_lookup_table(16)
   store_lookup_table(32)
   store_lookup_table(32_safe)
+#ifdef NSPIRE_BUILD
+@ Regions 0x05-0x07 of each store table while lines wait (see above)
+#define flush_table(store_type)                                              ;\
+  .word ext_store_palette_u##store_type##_flush                              ;\
+  .word ext_store_vram_u##store_type##_flush                                 ;\
+  .word ext_store_oam_ram_u##store_type##_flush                              ;\
+
+defsymbl(st_flush_functions)
+  flush_table(8)
+  flush_table(16)
+  flush_table(32)
+  flush_table(32_safe)
+#endif
 defsymbl(ld_handler_functions)
   load_table_gen(u8,  rdmap)
   load_table_gen(s8,  rdmap)

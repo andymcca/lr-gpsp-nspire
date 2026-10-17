@@ -129,6 +129,10 @@ bool gba_load_state(const void* src)
       !sound_check_savestate(srcptr))
      return false;
 
+#ifdef NSPIRE_BUILD
+  nspire_video_lines_reset();
+#endif
+
   if (!(cpu_read_savestate(srcptr) &&
       input_read_savestate(srcptr) &&
       main_read_savestate(srcptr) &&

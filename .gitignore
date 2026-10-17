@@ -4,6 +4,7 @@ video.cc.asm
 
 # Build output
 *.o
+*.d
 *.elf
 *.tns
 tests/host/build/

@@ -306,8 +306,10 @@ static void present_landscape(const u16 *frame, u32 pitch)
   draw_text_landscape(dst);
 }
 
-/* Shows the frame the core just drew. */
-void nspire_present_frame(void)
+/* Shows the frame the core just drew. Not inlined into the frame loop: the
+ * PC speed estimate (tests/calc_speed.py) counts the picture's time by this
+ * function. */
+__attribute__((noinline)) void nspire_present_frame(void)
 {
   const u16 *frame = gba_screen_pixels;
   u32 pitch = GBA_SCREEN_PITCH;

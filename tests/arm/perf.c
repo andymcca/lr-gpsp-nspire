@@ -11,9 +11,11 @@
  * DRAW: 1 draws every frame, 0 none, N one frame in N (fast forward
  * drawing fewer). Settings (default: the owner's, 2026-10-14): rombuf=16
  * policy=0 (Partial SMC) renderer=0 (video.cc) scale=1 (scaled/blended 3:2)
- * mix=1 (interframe blending) sprlim=1 (no sprite limit). KEYS as in
- * replay.c. Prints a hash of every 50th frame and of the last one, so a
- * change that should draw the same can be checked with the same run;
+ * mix=1 (interframe blending) sprlim=1 (no sprite limit); batch=0 draws
+ * each line at its HBlank instead of in batches (video.h). KEYS as in
+ * replay.c. Prints a hash of every 50th frame (every=N: every Nth) and of
+ * the last one, so a change that should draw the same can be checked with
+ * the same run;
  * ppm=DIR also writes the screen as shown at those frames (DIR/sNNNNN.ppm,
  * turned back to landscape); dump=DIR writes the dynarec's code at the end.
  */
@@ -200,7 +202,7 @@ static int setting(int argc, char **argv, const char *name, int value)
 
 int main(int argc, char **argv)
 {
-  int frames, frame, draw_every;
+  int frames, frame, draw_every, hash_every;
   const char *ppm_dir;
 
   if (argc < 7)
@@ -218,6 +220,8 @@ int main(int argc, char **argv)
   nspire_sprlim_choice = setting(argc, argv, "sprlim", 1);
   sprite_limit = nspire_sprlim_choice ? 0 : 1;
   ppm_dir = text_setting(argc, argv, "ppm");
+  hash_every = setting(argc, argv, "every", 50);
+  nspire_batch_lines = setting(argc, argv, "batch", 1);
   if (!read_keys(argv[5]))
   {
     fprintf(stderr, "can't read keys %s\n", argv[5]);
@@ -268,7 +272,7 @@ int main(int argc, char **argv)
     }
     if (!skip_next_frame)
       nspire_present_frame();
-    if (frame % 50 == 0 || frame == frames)
+    if (frame % hash_every == 0 || frame == frames)
     {
       printf("frame %d %08x\n", frame, (unsigned)frame_hash());
       if (ppm_dir)

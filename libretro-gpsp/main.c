@@ -117,7 +117,7 @@ void init_main(void)
 #endif
 }
 
-u32 function_cc update_gba(int remaining_cycles)
+NSPIRE_HOT u32 function_cc update_gba(int remaining_cycles)
 {
   u32 changed_pc = 0;
   u32 frame_complete = 0;
@@ -168,7 +168,11 @@ u32 function_cc update_gba(int remaining_cycles)
           if(reg[OAM_UPDATED])
             oam_update_count++;
 
+#ifdef NSPIRE_BUILD
+          nspire_video_line_ready(vcount);
+#else
           update_scanline();
+#endif
 
           // Trigger the HBlank DMAs if enabled
           for (i = 0; i < 4; i++)
@@ -194,6 +198,11 @@ u32 function_cc update_gba(int remaining_cycles)
           // Transition from vrefresh to vblank
           u32 i;
           dispstat |= 0x01;
+
+#ifdef NSPIRE_BUILD
+          // The lines still waiting to be drawn (video.h)
+          nspire_flush_lines();
+#endif
 
           // Reinit affine transformation counters for the next frame
           video_reload_counters();
@@ -305,6 +314,9 @@ void reset_gba(void)
   init_main();
   init_cpu();
   reset_sound();
+#ifdef NSPIRE_BUILD
+  nspire_video_lines_reset();
+#endif
 #if defined(NSPIRE_LIBRETRO)
   nspire_fps_overlay_reset();
 #endif

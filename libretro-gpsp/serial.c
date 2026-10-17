@@ -182,14 +182,14 @@ cpu_alert_type write_siocnt(u16 value) {
 }
 
 // How many cycles until the next serial event happens. Return MAX otherwise.
-u32 serial_next_event() {
+NSPIRE_HOT u32 serial_next_event() {
   if (serial_irq_cycles)
     return serial_irq_cycles;
   return ~0U;
 }
 
 // Account for consumed cycles and return if a serial IRQ should be raised.
-bool update_serial(unsigned cycles) {
+NSPIRE_HOT bool update_serial(unsigned cycles) {
   // Might wanna check if the connected device has some update (IRQ).
   switch (serial_mode) {
   case SERIAL_MODE_RFU:

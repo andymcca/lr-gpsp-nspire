@@ -243,7 +243,7 @@ void serialpoke_frame_update(void) {
   }
 }
 
-bool serialpoke_update(unsigned cycles) {
+static __attribute__((noinline)) bool serialpoke_update_client(unsigned cycles) {
   u32 i;
   serstate.poke.frcnt += cycles;
 
@@ -367,6 +367,16 @@ bool serialpoke_update(unsigned cycles) {
     }
   }
   return false;
+}
+
+// Runs at every event. Only a netplay client pretends a master sends (out
+// of line, so the code every event runs stays small: common.h NSPIRE_HOT).
+NSPIRE_HOT bool serialpoke_update(unsigned cycles) {
+  if (!netplay_client_id) {
+    serstate.poke.frcnt += cycles;
+    return false;
+  }
+  return serialpoke_update_client(cycles);
 }
 
 void serialpoke_net_receive(const void* buf, size_t len, uint16_t client_id) {
@@ -567,7 +577,7 @@ void serialaw_master_send(void) {
     read_ioreg(REG_SIOMULTI2), read_ioreg(REG_SIOMULTI3));
 }
 
-bool serialaw_update(unsigned cycles) {
+static __attribute__((noinline)) bool serialaw_update_client(unsigned cycles) {
   u32 i;
   serstate.aw.frcnt += cycles;
 
@@ -674,6 +684,16 @@ bool serialaw_update(unsigned cycles) {
   }
 
   return false;
+}
+
+// Runs at every event. Only a netplay client pretends a master sends (out
+// of line, so the code every event runs stays small: common.h NSPIRE_HOT).
+NSPIRE_HOT bool serialaw_update(unsigned cycles) {
+  if (!netplay_client_id) {
+    serstate.aw.frcnt += cycles;
+    return false;
+  }
+  return serialaw_update_client(cycles);
 }
 
 void serialaw_net_receive(const void* buf, size_t len, uint16_t client_id) {

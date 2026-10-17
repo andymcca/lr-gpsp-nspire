@@ -38,6 +38,8 @@
  *                 ADDR, and of everything it calls, go to NAME (up to 7
  *                 names; the rest go to region 0, "cpu")
  *   fill=N write=N word=N writeback=N    memory timings (cycles)
+ *   repl=rr|counter|random   which line a fill replaces (see p_repl)
+ *   icache=BYTES dcache=BYTES   other cache sizes, to see what a part needs
  * The output lists the totals, the cycles and instructions of every region
  * in every frame, and the instructions and cycles of every instruction
  * address per region (for per-function sums by tests/calc_speed.sh), with
@@ -123,6 +125,12 @@ struct cache
 };
 
 static struct cache icache, dcache;
+/* Victim choice: 0 round-robin per set (the default), 1 one round-robin
+ * counter per cache (stepped at each line fill), 2 pseudo-random. Which one
+ * the calculator uses (CP15 control register bit 14, random after reset)
+ * isn't known, so the speed estimate can be run with each (repl=). */
+static int p_repl;
+static int icache_bytes = 16 * 1024, dcache_bytes = 8 * 1024;
 
 static void cache_init(struct cache *c, int bytes, int ways)
 {
@@ -150,9 +158,26 @@ static int cache_find(struct cache *c, uint64_t addr, int *set_out)
 /* Puts the line in; returns 1 if a dirty line was thrown out */
 static int cache_fill(struct cache *c, uint64_t addr, int set)
 {
-    int w = c->victim[set];
+    static uint32_t lfsr = 0x12345678;
+    int w;
+    if (p_repl == 2)
+    {
+	lfsr ^= lfsr << 13;
+	lfsr ^= lfsr >> 17;
+	lfsr ^= lfsr << 5;
+	w = lfsr % c->ways;
+    }
+    else if (p_repl == 1)
+    {
+	w = c->victim[0];
+	c->victim[0] = (w + 1) % c->ways;
+    }
+    else
+    {
+	w = c->victim[set];
+	c->victim[set] = (w + 1) % c->ways;
+    }
     int was_dirty = c->dirty[set * c->ways + w] && c->tag[set * c->ways + w] != ~(uint64_t) 0;
-    c->victim[set] = (w + 1) % c->ways;
     c->tag[set * c->ways + w] = addr >> LINE_SHIFT;
     c->dirty[set * c->ways + w] = 0;
     return was_dirty;
@@ -682,6 +707,12 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id, const qemu_info_
 	    p_word = strtoull(v, NULL, 0);
 	else if (!strcmp(argv[i], "writeback"))
 	    p_writeback = strtoull(v, NULL, 0);
+	else if (!strcmp(argv[i], "repl"))
+	    p_repl = !strcmp(v, "random") ? 2 : !strcmp(v, "counter") ? 1 : 0;
+	else if (!strcmp(argv[i], "icache"))
+	    icache_bytes = strtoul(v, NULL, 0);
+	else if (!strcmp(argv[i], "dcache"))
+	    dcache_bytes = strtoul(v, NULL, 0);
 	else
 	{
 	    fprintf(stderr, "arm926: unknown argument %s\n", argv[i]);
@@ -690,8 +721,8 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id, const qemu_info_
     }
     if (!mark_addr)
 	counting = 1;
-    cache_init(&icache, 16 * 1024, 4);
-    cache_init(&dcache, 8 * 1024, 4);
+    cache_init(&icache, icache_bytes, 4);
+    cache_init(&dcache, dcache_bytes, 4);
     frame_marks = g_array_new(FALSE, FALSE, sizeof(uint64_t));
     all_insns = g_ptr_array_new();
     by_pc_word = g_hash_table_new(pc_word_hash, pc_word_equal);

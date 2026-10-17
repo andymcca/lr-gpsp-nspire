@@ -1,0 +1,14 @@
+# From power-on through a game's intro and title screens into its menus:
+# Start and A now and then (frames from to keys, as in replay.c).
+240 250 START
+420 430 START
+600 610 A
+780 790 START
+960 970 A
+1140 1150 A
+1320 1330 START
+1500 1510 A
+1680 1690 A
+1860 1870 START
+2040 2050 A
+2220 2230 A

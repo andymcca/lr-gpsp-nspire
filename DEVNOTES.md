@@ -65,6 +65,7 @@ Where things are
 | `nspire_host_main.c` | main, starting and leaving games, the game loop, hotkeys, the speed test |
 | `nspire_frameskip.c` | frame pacing (32768 Hz timer), frameskip, the FPS counters, timing |
 | `nspire_video_present.c` | a game frame to the LCD, with the text bands |
+| `nspire_lines.c` | the picture's lines drawn in batches (see "Speed (2026-10-16)") |
 | `nspire_turn.c` | turning pictures for the portrait LCD (sharp scalings, rectangles) |
 | `nspire_blend.c` | the blended scalings in one pass, with interframe blending |
 | `nspire/nspire.c` | the screen buffers and flip, timer, caches |
@@ -84,7 +85,8 @@ Where things are
 | `libretro-gpsp/gba_memory.c` | the core's ROM loading: zip and progress hooks are here |
 | `libretro-gpsp/cpu_threaded.c` | the dynarec: translating blocks, linking their branches, Partial/Classic SMC |
 | `nspire/scanline_fill16.S` | video.cc's backdrop fill in ARM assembly |
-| `tests/arm/` | ARM code under qemu-arm: the blend and fill tests, the core on a test ROM (`dynarec_test.c`) and on real games (`replay.c`) |
+| `tests/arm/` | ARM code under qemu-arm: the blend and fill tests, the core on a test ROM (`dynarec_test.c`) and on real games (`replay.c`, `perf.c`) |
+| `tests/calc_speed.sh`, `tests/speed_scenes.sh` | the PC speed estimate: one game, or every test scene side by side |
 
 
 Decisions and why
@@ -433,3 +435,110 @@ to ~70 for that half second. Next ideas: hand-written ARM for the 3:2
 picture (~9.8 instead of 13 instructions a pixel, GCC spills), rendering
 lines into a cached buffer and turning them while hot (saves reading the
 frame back), faster tile drawing in video.cc, block lookup cache.
+
+
+Speed (2026-10-16)
+------------------
+
+The owner: Advance Wars ran "at like 40 fps" (their name-entry state),
+"make it run at 120 like you did for emerald but make all the improvements
+applicable for all games". The PC estimate agreed: 39.8 frames a second,
+13.3 ms of game time a frame (Emerald's is about 4).
+
+**Why Advance Wars was slow.** It turns on the HBlank interrupt for every
+line, 228 a frame, and its handler does nothing on 226 of them (it changes
+display registers at two lines). Each interrupt goes through the BIOS, the
+game's IWRAM dispatcher (mode switches, IE/IF writes, pushes and pops) and
+back: about 3300 host instructions. And its idle loop (gba_over.h
+0x0803880a) never got skipped: the dynarec compared that address with the
+loop's branch, but it's the loop's first instruction (the table's address
+is the branch for most games, e.g. Emerald's 0x080008ce; the interpreter
+checks any instruction, so either works there). Fire Emblem's intro and
+Emerald's battle wipe also take an interrupt every line.
+
+What was done (all games; each checked frame by frame, see below):
+
+* **Idle loops**: a branch *to* the table's address counts too
+  (`generate_branch_no_cycle_update`). Advance Wars: 13.3 -> 10.9 ms.
+* **Lines drawn in batches** (`nspire_lines.c`, video.h): a line is handed
+  over at its HBlank as before, but drawn when the game next writes what
+  the picture is made of (display registers below 0x58 except
+  DISPSTAT/VCOUNT, palette, VRAM, OAM, a DMA into them) or at VBlank. The
+  waiting lines see exactly what they would have seen. Drawing 160 lines in
+  a row keeps the renderer in the instruction cache instead of renderer and
+  game code pushing each other out every line. Writers: write_io_register16,
+  write_memory (C), dma_transfer, and for the dynarec arm_stub.S's
+  `*_flush` store handlers, swapped into `st_lookup_tables` only while lines
+  wait (stores pay nothing otherwise). The renderers take the line number
+  from REG_VCOUNT, which the flush sets for each line. Reset and state loads
+  drop waiting lines. `nspire_batch_lines = 0` draws line by line (tests).
+  Fire Emblem changes registers every line, so its batches are one line.
+* **Hot code in one stretch** (`NSPIRE_HOT`, section `.text.hot.gpsp`:
+  update_gba, the block lookups, mode switches, interrupt checks, the line
+  batching, serial/RFU updates' fast part, all of arm_stub.S): the code each
+  interrupt runs is about 8 KB, but it was scattered so that a dozen of the
+  instruction cache's 128 sets held 5-6 of its lines (4 fit) and evicted
+  each other at every interrupt. The model showed it: game time 10.1-10.9
+  ms whatever the replacement policy, 6.6 ms with a 32 KB cache. Ndless's
+  linker script puts all `.text.*` together, so `-fno-reorder-functions`
+  keeps main (`.text.startup`) out of the middle. `tests/calc_checks.py`
+  checks the stretch is under 16 KB with nothing else in it. Serial and RFU
+  updates run at every event: their netplay part is out of line now
+  (`*_client`, `rfu_update_busy`), never used on the calculator.
+* **Block lookup cache** (`nspire_block_cache`, cpu_threaded.c; arm_stub.S
+  `cached_lookup`, one copy in `arm_lookup_saved_*`): 256 entries of the
+  last blocks found at ROM and BIOS addresses, looked up in the stubs before
+  calling C. The hash table behind it is 256 KB, so nearly every lookup
+  missed the data cache; every function return and interrupt looks up a
+  block. RAM blocks aren't kept (any write can remove them). Emptied with
+  the ROM cache.
+* **Fast push/pop** (arm_emit.h `nspire_block_fast`): ldm/stm/push/pop on
+  IWRAM (GBA games' stacks) check once that all words are in IWRAM, then do
+  one load or store per register; before, each register went through the
+  memory dispatch (about 16 instructions). Anything else, and a store whose
+  last word holds translated code, runs the old per-register code (which
+  stores the same values again and handles self-modifying code as before).
+  Turns itself off if IWRAM isn't 0xA0000 below `reg` (calc_checks.py
+  checks the build). 0.5 ms in Advance Wars and Fire Emblem.
+
+The PC estimate, before (3af562b) and now, every frame drawn, 396 MHz
+(`tests/speed_scenes.sh`; game / drawing / picture ms, frames a second):
+
+| Scene | before | now |
+|---|---|---|
+| Advance Wars name entry | 13.3 / 7.8 / 4.0, 39.8 | 6.1 / 4.1 / 4.0, 70.4 |
+| Emerald grass and battle wipe | 4.2 / 4.4 / 4.0, 79.0 | 4.0 / 4.1 / 4.0, 82.6 |
+| Fire Emblem intro | 8.3 / 7.5 / 4.0, 50.5 | 6.9 / 6.9 / 4.0, 56.1 |
+| Golden Sun intro | 4.4 / 8.1 / 4.0, 60.7 | 3.6 / 7.6 / 4.0, 65.6 |
+| Minish Cap intro | 3.6 / 4.8 / 4.0, 80.1 | 3.1 / 4.4 / 4.0, 87.4 |
+
+Fast forward (frameskip off, unlimited) from these: Advance Wars ~124 game
+frames a second with ~30 pictures (before ~68), Fire Emblem's intro ~120
+(~103), Emerald 129 with 60 pictures, Minish Cap ~160. Not yet seen on the
+calculator.
+
+**Same frames.** `tests/arm/run.sh` plays 8 scenes (the owner's Advance
+Wars state, every frame and every other frame; Emerald into the grass;
+Advance Wars, Emerald, Fire Emblem, Golden Sun and Minish Cap from power-on
+through their intros, `replay/boot.keys`) with both renderers, batched and
+line by line, and compares every frame's hash (perf.c `every=1 batch=0`).
+Against the build before (3af562b with only the idle-loop change, which
+changes Advance Wars' timing): all 16 runs the same, frame for frame.
+
+**The model.** `tests/calc_speed.sh --model repl=random` (or `counter`;
+the default is round-robin per set) and `icache=`/`dcache=` sizes:
+the CPU's choice (CP15 control bit 14) isn't known; results moved less than
+10% between them once the hot code was in one stretch. The speed harness
+is now linked with `-flto` like the calculator build (cross-file inlining
+changes the hot code), with `update_scanline` and `nspire_present_frame`
+kept out of line so the drawing and picture times can be told apart.
+Placement matters a lot here: the same code measured 6.4 or 9.9 ms of game
+time depending on where the linker put it, before the hot section.
+
+Next ideas: the 3:2 picture in hand-written ARM (4.0 ms, every drawn frame
+of every game); the renderer's hot code (Golden Sun's per-line renderer
+code is 17 KB, over the cache); interrupt entry/exit and mode switches in
+assembly; skipping events for idle loops (unsafe for loops that poll
+VCOUNT); the on-chip SRAM for hot code (misses cost a quarter, but
+PocketSNES froze the calculator writing there).
+

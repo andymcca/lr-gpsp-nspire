@@ -33,16 +33,19 @@ INCLUDES   := -I$(CORE_DIR) -I$(CORE_DIR)/libretro -I$(COMM_DIR)/include \
               $(INCLUDES_ARM) -I. -Inspire
 
 # TI-Nspire CX (etc.): ARM926EJ-S, ARMv5TE (+ Thumb, integer DSP). No VFP/NEON.
-ARM926FLAGS := -march=armv5te -mtune=arm926ej-s -fomit-frame-pointer -ffast-math
+# -fno-reorder-functions: no .text.startup / .text.unlikely sections; Ndless's
+# linker script puts every .text.* section together, and main in .text.startup
+# landed in the middle of .text.hot.gpsp (common.h NSPIRE_HOT).
+ARM926FLAGS := -march=armv5te -mtune=arm926ej-s -fomit-frame-pointer -ffast-math -fno-reorder-functions
 
 CFLAGS := -O3 -flto -std=c99 -msoft-float -funsigned-char -fno-common \
           $(ARM926FLAGS) \
           -D_GNU_SOURCE \
-          $(BASE_FLAGS) $(INCLUDES) -Wall -Wfatal-errors
+          $(BASE_FLAGS) $(INCLUDES) -Wall -Wfatal-errors -MMD -MP
 
 CXXFLAGS := -O3 -flto -std=gnu++11 -msoft-float -funsigned-char -fno-common \
             $(ARM926FLAGS) \
-            $(BASE_FLAGS) $(INCLUDES) -fno-exceptions -fno-rtti -Wall -Wfatal-errors
+            $(BASE_FLAGS) $(INCLUDES) -fno-exceptions -fno-rtti -Wall -Wfatal-errors -MMD -MP
 
 GUI_CPPFLAGS := -DCOMPILING_GUI_MODULE
 
@@ -71,7 +74,7 @@ CORE_CXX_OBJS := cpu.o
 LOCAL_OBJS := \
   nspire_host_main.o nspire_frameskip.o nspire_video_present.o nspire_video_ui.o \
   nspire_input.o nspire_stubs.o nspire_backup.o nspire_stack_glue.o \
-  nspire_video_renderer_dispatch.o video_cc_renderer.o old_video_renderer.o \
+  nspire_video_renderer_dispatch.o nspire_lines.o video_cc_renderer.o old_video_renderer.o \
   video_blend.o upscale_aspect.o scanline_fill16.o nspire_upscale_from_gba.o nspire_turn.o nspire.o nspire_rom_load_diag.o \
   nspire_gbz.o nspire_states.o nspire_config.o nspire_clock.o clock_switch_nspire.o nspire_keys.o \
   nspire_brightness.o nspire_game_list.o nspire_blend.o \
@@ -153,4 +156,8 @@ gpsp_libretro.tns: gpsp_libretro.elf
 	$(GENZ) $(ZEHNFLAGS) --input $< --output $@
 
 clean:
-	rm -f $(OBJS) gpsp_libretro.elf gpsp_libretro.tns video.cc.asm
+	rm -f $(OBJS) $(OBJS:.o=.d) gpsp_libretro.elf gpsp_libretro.tns video.cc.asm
+
+# Header dependencies (-MMD): a changed header (arm_emit.h...) rebuilds what
+# includes it.
+-include $(OBJS:.o=.d)

@@ -863,7 +863,7 @@ void rfu_net_receive(const void* buf, size_t len, uint16_t client_id) {
 }
 
 // Account for consumed cycles and return if a serial IRQ should be raised.
-bool rfu_update(unsigned cycles) {
+static __attribute__((noinline)) bool rfu_update_busy(unsigned cycles) {
   if (rfu_comstate == RFU_COMSTATE_WAITEVENT) {
     // Force receive packets so that we can perhaps abort the wait
     // This helps minimize latency (otherwise we need to wait a full frame!)
@@ -932,5 +932,13 @@ bool rfu_update(unsigned cycles) {
   }
 
   return false;
+}
+
+// Runs at every event: nothing to do unless a transfer waits (out of line,
+// so the code every event runs stays small: common.h NSPIRE_HOT).
+NSPIRE_HOT bool rfu_update(unsigned cycles) {
+  if (rfu_comstate != RFU_COMSTATE_WAITEVENT && rfu_comstate != RFU_COMSTATE_WAITRESP)
+    return false;
+  return rfu_update_busy(cycles);
 }
 

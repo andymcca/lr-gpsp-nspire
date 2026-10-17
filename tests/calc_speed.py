@@ -102,6 +102,8 @@ def run(args, plugin, tag):
     if args.functions_of:
         first, last = args.functions_of.split('-')
         plugin_args += ',first=%d,last=%d' % (int(first) - 1, int(last))
+    if args.model:
+        plugin_args += ',' + args.model
     cmd = [QEMU, '-cpu', 'arm926', '-plugin', plugin_args,
            os.path.relpath(elf, ARM), link(tag + '.rom', args.rom), link(tag + '.bios', args.bios),
            link(tag + '.state', args.state) if args.state != '-' else '-', str(args.frames),
@@ -222,6 +224,9 @@ def main():
     ap.add_argument('--top', type=int, default=0, help='list the N costliest functions')
     ap.add_argument('--functions-of', metavar='A-B',
                     help='list the functions of frames A to B only (with --top)')
+    ap.add_argument('--model', metavar='ARGS',
+                    help='more arguments for the ARM926 model, e.g. repl=random or icache=32768'
+                         ' (tools/calc_speed/arm926.c)')
     ap.add_argument('--tag', default='run', help='name of the output files in tests/arm/build/speed')
     ap.add_argument('--set', action='append', default=[], metavar='NAME=VALUE',
                     help='a setting other than the owner\'s (rombuf=16 policy=0 renderer=0 scale=1 mix=1'
