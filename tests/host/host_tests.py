@@ -1260,18 +1260,22 @@ quit
     box = r.shot("counter").box(0, 12)
     check(box is not None and box[0] < 10, "fps: the counter is drawn at the top: %s" % (box,))
     ff = r.notes["ff_b"]["frame"] - r.notes["ff_a"]["frame"]
-    check(ff > 90, "fast forward: %d frames a second" % ff)
+    shown = r.notes["ff_b"]["shown"] - r.notes["ff_a"]["shown"]
+    # 14 ms a drawn frame: 60 pictures a second first, the game faster than
+    # normal with the rest of the time.
+    check(ff > 70, "fast forward: %d frames a second" % ff)
+    check(58 <= shown <= 61, "fast forward: %d pictures a second" % shown)
     box = r.shot("ff").box(0, 12)
     check(box is not None and box[2] < 60, "fast forward: the counter as drawn/expected, %s" % (box,))
 
 
 def test_fast_forward_pace():
-    """Fast forward with frameskip off (the owner's settings): the game runs
-    as fast as it can, and every LCD refresh gets a new picture (60 a
-    second; more would never be shown). The counter shows game frames
-    against 60."""
-    def ff_run(name, costs):
-        return Run(name, files={"gpsp_qol.cfg.tns": owner_config()}).run(costs + """
+    """Fast forward with frameskip off (the owner's settings) or auto: the
+    game runs as fast as it can, and every LCD refresh gets a new picture
+    (60 a second; more would never be shown), unless that would hold the
+    game below its normal speed. The counter shows game frames against 60."""
+    def ff_run(name, costs, cfg=None):
+        return Run(name, files={"gpsp_qol.cfg.tns": cfg or owner_config()}).run(costs + """
 wait 1
 press enter
 wait 1
@@ -1306,6 +1310,37 @@ quit
     check(57 <= back <= 61, "fast forward, heavy game: normal speed after: %d" % back)
     box = heavy.shot("counter").box(0, 12)
     check(box is not None and 20 < box[2] < 60, "fast forward: the counter, game frames/60: %s" % (box,))
+
+    # The owner's Advance Wars as the PC estimate has it (tests/speed_scenes.sh,
+    # 2026-10-16: 6.1 ms running a frame, 4.1 drawing, 4.0 for the picture):
+    # 60 pictures a second come first (the owner: "if the fps is above 60
+    # show 60 frames a second"), the game gets the rest of the time.
+    aw = ff_run("ff_advance_wars", "cost frame 6.1\ncost line 25.5\ncost turn 4.0\ncost touchpad 0.4\n")
+    n = aw.notes
+    game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
+    shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
+    check(game >= 75, "fast forward, Advance Wars' costs: %.1f game frames a second" % game)
+    check(58 <= shown <= 61, "fast forward, Advance Wars' costs: %.1f pictures a second" % shown)
+
+    # Too heavy for 60 pictures at 60 game frames a second (7 + 4.8 + 6 ms a
+    # drawn frame): pictures make way, only as far as it takes to keep the
+    # game at its normal speed.
+    over = ff_run("ff_too_heavy", "cost frame 7\ncost line 30\ncost turn 6\ncost touchpad 0.4\n")
+    n = over.notes
+    game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
+    shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
+    check(game >= 57, "fast forward, too heavy for 60 pictures: %.1f game frames a second" % game)
+    check(30 <= shown < 58, "fast forward, too heavy for 60 pictures: %.1f pictures a second" % shown)
+
+    # Auto frameskip: a picture per refresh too (one in 5 before).
+    cfg = owner_config()
+    cfg[24] = 0   # auto
+    auto = ff_run("ff_auto_frameskip", "cost frame 5\ncost line 25\ncost turn 4.5\ncost touchpad 0.4\n", cfg)
+    n = auto.notes
+    game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
+    shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
+    check(game >= 90, "fast forward, auto frameskip: %.1f game frames a second" % game)
+    check(58 <= shown <= 61, "fast forward, auto frameskip: %.1f pictures a second" % shown)
 
     # A light game: as fast as it goes, but no more than a picture per refresh.
     light = ff_run("ff_light", "cost frame 2\ncost line 10\ncost turn 2\ncost touchpad 0.4\n")

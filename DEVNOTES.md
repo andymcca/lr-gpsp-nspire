@@ -415,6 +415,12 @@ Done (estimates, owner's Emerald route state / grass-to-battle replay):
   Emerald's overworld. The owner then asked for 60 pictures whenever the
   game is over 60 ("if i am getting over 60 it should be displaying 60"),
   so pictures are no longer left out for speed. Speed test part 4 runs it.
+  (Rolled back on 2026-10-15 with the top speed cap, back on 2026-10-16 after
+  the owner: "if the fps is above 60 show 60 frames a second. never show
+  less than 60 frames a second if you can". Since then auto frameskip does
+  the same, and a scene too heavy to draw 60 pictures and run 60 game
+  frames a second leaves pictures out, only enough to keep the game at its
+  normal speed (`fast_forward_behind`; at least one in 8 drawn).)
 * Fast forward max speed (Graphics line 12, the owner's request): 1.1x to
   10.0x in tenths, then unlimited (default; `nspire_ff_max` is the menu's
   index, settings word 67 keeps tenths, 0 = unlimited, also per game).
@@ -519,10 +525,12 @@ The PC estimate, before (3af562b) and now, every frame drawn, 396 MHz
 | Golden Sun intro | 4.4 / 8.1 / 4.0, 60.7 | 3.6 / 7.6 / 4.0, 65.6 |
 | Minish Cap intro | 3.6 / 4.8 / 4.0, 80.1 | 3.1 / 4.4 / 4.0, 87.4 |
 
-Fast forward (frameskip off, unlimited) from these: Advance Wars ~124 game
-frames a second with ~30 pictures (before ~68), Fire Emblem's intro ~120
-(~103), Emerald 129 with 60 pictures, Minish Cap ~160. Not yet seen on the
-calculator.
+Fast forward (frameskip off, unlimited), 60 pictures a second first (the
+owner, the same day): Advance Wars ~84 game frames a second with all 60
+pictures (the simulator with these costs: 82.5; leaving pictures out it
+would reach ~124 with ~30), Emerald ~129, Minish Cap ~160, Golden Sun's
+intro ~84; Fire Emblem's intro can't draw 60 and run at 60, so it runs at
+60 with ~54 pictures. Not yet seen on the calculator.
 
 **Same frames.** `tests/arm/run.sh` plays 8 scenes (the owner's Advance
 Wars state, every frame and every other frame; Emerald into the grass;

@@ -212,10 +212,12 @@ a second / the most there can be; in fast forward, game frames a second /
 drawing, showing, idle; logged to `gpsp_perf.txt.tns`). *Fast forward max
 speed* (Graphics options): 1.1x to 10.0x in steps of 0.1x, or unlimited
 (the default: as fast as the game runs). Fast forward never skips game
-frames; with frameskip off every LCD refresh gets a new picture (60 a
-second), and the game runs as fast as the rest of the time allows. A top
-speed is only a cap: a game that can't reach it runs as fast as it can,
-still drawing every picture. *Run speed test* runs the game from where it is for 25
+frames; with frameskip off or auto every LCD refresh gets a new picture
+(60 a second), and the game runs as fast as the rest of the time allows.
+Only where drawing all 60 would hold the game below its normal speed are
+pictures left out, just enough to keep it there. A top speed is only a cap:
+a game that can't reach it runs as fast as it can, still drawing every
+picture. Manual frameskip draws one frame in five in fast forward. *Run speed test* runs the game from where it is for 25
 seconds (normal play, no speed limit with every frame drawn, no limit with
 nothing drawn, fast forward) and writes `gpsp_results.txt.tns`.
 *CPU speed (CX II)* in Emulator options: normal, or 408 to 504 MHz in 12 MHz
