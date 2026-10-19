@@ -82,6 +82,10 @@ the fix for that one.
 and shown from one of three buffers, which the LCD switches between only
 between refreshes: no diagonal tearing (that came from Ndless's compatibility
 mode, which turned the picture inside the panel), and no tearing at all.
+*Tear-free frames* (Graphics options) is the wait until the panel has finished
+with a buffer before gpSP draws into it. It follows the clock: on for a CX II,
+off for a CX, because on a CX that wait can run out its whole 1/25 s. Turn it
+on there if a frame tears.
 Frames are paced with a 32768 Hz timer at the GBA's 59.73 frames a second
 instead of waiting for the LCD after every frame, so **automatic frameskip
 works** now (it never skipped before): it draws every frame unless the game

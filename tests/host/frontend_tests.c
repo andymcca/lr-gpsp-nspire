@@ -305,6 +305,13 @@ static void test_config(void)
         "graphics settings %u %u %u", screen_scale, current_frameskip_type, frameskip_value);
   CHECK(nspire_fps_overlay == 2 && !nspire_auto_increment && !nspire_save_on_exit && nspire_load_on_start &&
         nspire_cpu_speed == 2 && nspire_rom_buffer_size_choice == 12, "the new settings");
+  CHECK(nspire_tear_free == 1, "tear-free stayed on");
+  nspire_tear_free = 0;
+  CHECK(nspire_config_save() == 0, "save tear-free off");
+  nspire_tear_free = 1;
+  CHECK(nspire_config_load() == 0 && nspire_tear_free == 0, "tear-free off reloads");
+  nspire_tear_free = 1;
+  CHECK(nspire_config_save() == 0, "tear-free back on");
   CHECK(key_bindings[ACTION_A][0].key == KEY_DEL && key_bindings[ACTION_A][1].key == KEY_7, "A's keys");
   CHECK(key_bindings[ACTION_SAVE_STATE][1].key == KEY_S && key_bindings[ACTION_SAVE_STATE][1].with == KEY_SHIFT,
         "combo kept");
