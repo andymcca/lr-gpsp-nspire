@@ -10,6 +10,11 @@
 
 typedef struct
 {
+  unsigned short width, height;
+} touchpad_info_t;
+
+typedef struct
+{
   unsigned char contact, proximity;
   unsigned short x, y;
   unsigned char x_velocity, y_velocity;
@@ -24,6 +29,7 @@ typedef enum
 } tpad_arrow_t;
 
 int touchpad_scan(touchpad_report_t *report);
+touchpad_info_t *touchpad_getinfo(void);
 int on_key_pressed(void);
 void cfg_register_fileext(const char *ext, const char *prgm);
 const char *get_documents_dir(void);

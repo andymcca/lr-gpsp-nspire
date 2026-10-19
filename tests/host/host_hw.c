@@ -28,6 +28,9 @@
  *   press KEY        down for 0.1 s, then up; 0.25 s pass
  *   tap KEY          down for 0.03 s, then up; 0.1 s pass
  *   hold KEY / release KEY
+ *   touch X Y       begin/continue finger contact at native touchpad coordinates
+ *   move X Y        move the finger while contact is held
+ *   untouch         lift the finger
  *   shot NAME        OUTDIR/NAME.ppm: what the LCD shows now (320x240)
  *   note NAME        a line in the report (game, frame, backlight; see below)
  *   cost KIND N      from now on: frame (ms of a game frame's emulation),
@@ -71,7 +74,7 @@ int gpsp_main(int argc, char *argv[]);
 
 /* ---- The script ---- */
 
-enum event_type { EV_DOWN, EV_UP, EV_SHOT, EV_NOTE, EV_COST, EV_QUIT };
+enum event_type { EV_DOWN, EV_UP, EV_TOUCH, EV_UNTOUCH, EV_SHOT, EV_NOTE, EV_COST, EV_QUIT };
 enum cost_kind { COST_FRAME, COST_LINE, COST_TURN, COST_TOUCHPAD, COST_READ, COSTS };
 
 struct event
@@ -93,6 +96,8 @@ static double now;                  /* virtual time in timer ticks */
 static double costs[COSTS];         /* in ticks (a line's, a whole turn's...) */
 static uint32_t keys[4];
 static int on_key;
+static int touch_contact;
+static unsigned short touch_x, touch_y;
 static uint32_t timer_load, timer_control, timer_clock;
 static uint32_t lcd_timing[3] = { 0x1425094C, 0x03780D3F, 0x00EF3802 };   /* the OS's portrait setup */
 static uint32_t lcd_control = 0x392D;
@@ -241,6 +246,14 @@ static void run_events(void)
         on_key = 0;
       else
         keys[(e->key - 1) >> 5] &= ~(1u << ((e->key - 1) & 31));
+      break;
+    case EV_TOUCH:
+      touch_contact = 1;
+      touch_x = (unsigned short)e->key;
+      touch_y = (unsigned short)e->value;
+      break;
+    case EV_UNTOUCH:
+      touch_contact = 0;
       break;
     case EV_SHOT:
       write_ppm(e->name);
@@ -479,6 +492,14 @@ static int held(unsigned key)
   return (keys[(key - 1) >> 5] >> ((key - 1) & 31)) & 1;
 }
 
+/* Stable 4:3 touchpad dimensions for the host build. On the calculator,
+ * touchpad_getinfo() supplies the real hardware dimensions. */
+touchpad_info_t *touchpad_getinfo(void)
+{
+  static touchpad_info_t info = { 320, 240 };
+  return &info;
+}
+
 /* The arrows and the click are the touchpad's: gpSP masks them out of the
  * keypad registers and reads them here, as on a CX II. */
 int touchpad_scan(touchpad_report_t *report)
@@ -486,6 +507,12 @@ int touchpad_scan(touchpad_report_t *report)
   int up = held(113), right = held(115), down = held(117), left = held(119);
   advance(costs[COST_TOUCHPAD]);
   memset(report, 0, sizeof(*report));
+  if (touch_contact)
+  {
+    report->contact = 1;
+    report->x = touch_x;
+    report->y = touch_y;
+  }
   if (held(98))
     report->arrow = TPAD_ARROW_CLICK;
   else if (up && right)
@@ -612,6 +639,18 @@ static void read_script(const char *path)
       add_event(t, EV_DOWN, key_number(arg), 0, NULL);
     else if (!strcmp(word, "release"))
       add_event(t, EV_UP, key_number(arg), 0, NULL);
+    else if (!strcmp(word, "touch") || !strcmp(word, "move"))
+    {
+      long x = strtol(arg, NULL, 10), y = strtol(arg2, NULL, 10);
+      if (n < 3 || x < 0 || x > 65535 || y < 0 || y > 65535)
+      {
+        fprintf(stderr, "gpsp-host: touch/move expects X Y coordinates: %s", line);
+        exit(2);
+      }
+      add_event(t, EV_TOUCH, (unsigned)x, (double)y, NULL);
+    }
+    else if (!strcmp(word, "untouch"))
+      add_event(t, EV_UNTOUCH, 0, 0, NULL);
     else if (!strcmp(word, "shot"))
       add_event(t, EV_SHOT, 0, 0, arg);
     else if (!strcmp(word, "note"))
