@@ -2234,6 +2234,11 @@ u32 menu(u16 *original_screen)
      10),
 #endif
 #if defined(NSPIRE_LIBRETRO)
+    string_selection_option(NULL, "Tear-free frames",
+     off_on_options, &nspire_tear_free, 2,
+     "On: three screen buffers, and gpSP waits until\n"
+     "the panel is done with a frame (no tearing).\n"
+     "Off is faster. A CX starts on off.", 12),
     action_option(menu_speed_test, NULL, "Run speed test",
      "Runs the game from here for 20 seconds, three\n"
      "ways, and shows where the time goes; then it's\n"

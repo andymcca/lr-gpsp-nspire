@@ -77,10 +77,16 @@ calculator. Now gpSP shows "Stopped", the game and where it jumped, and the
 file list comes back; no state is saved of it. A good copy of the game is
 the fix for that one.
 
-**Screen.** On the CX II the picture is turned for the portrait LCD in software
+**Screen.** Both models have a 320x240 color panel. The CX scans it landscape
+(320 wide). The CX II scans it portrait (240 wide), so on the CX II the picture
+is turned for the portrait LCD in software
 and shown from one of three buffers, which the LCD switches between only
 between refreshes: no diagonal tearing (that came from Ndless's compatibility
 mode, which turned the picture inside the panel), and no tearing at all.
+*Tear-free frames* (Graphics options) is that wait, until the panel has
+finished with a buffer before gpSP draws into it. It is on for a CX II and
+off for a CX: on a CX the wait can run out its whole 1/25 s and the game
+feels slow. Turn it on there if a frame tears.
 Frames are paced with a 32768 Hz timer at the GBA's 59.73 frames a second
 instead of waiting for the LCD after every frame, so **automatic frameskip
 works** now (it never skipped before): it draws every frame unless the game
