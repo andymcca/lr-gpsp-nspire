@@ -194,6 +194,16 @@ keys where they're free), and, unbound at first, load newest state, FPS
 counter, restart game. Save, load and slot changes show a message on screen. The number pad's 7 9 1 3 are diagonals
 unless bound to something. esc goes back in menus, and held arrows repeat.
 
+**Touchpad.** *Touchpad* on that same screen stays on **arrows**: a touch at an
+edge is a direction, as before. **Swipes** uses movement from where the finger
+first landed, and lifts off when the finger does. A diagonal holds both the
+horizontal and vertical directions while both are past *Swipe dead zone*.
+*Swipe sensitivity* scales that movement. Turning swipes on puts `SW-UP`,
+`SW-DOWN`, `SW-LEFT` and `SW-RIGHT` on the four directions' second key, if
+that key is empty. Each swipe also has its own button list: while that list
+is not "none", it replaces the key row for that swipe. Eight combo slots do
+the same for any other key or swipe. Those lists start empty.
+
 **Per game.** *Settings for* (Emulator options) and *Keys for* (Configure input)
 can be "this game only": the game keeps its own graphics, emulator and save
 options or keys in `Game.gba.settings.tns` in `zgpSP_saves`.

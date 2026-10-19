@@ -19,7 +19,13 @@
  *   63      screen brightness (0 the calculator's own, 1-10)
  *   64-65   the key bindings of actions 20-21 (brightness up, down)
  *   66      compress saves (1, the default) or not
- *   67-71   0 (room for more)
+ *   67      "SWP1", or 0 in a 72-word file from before touchpad swipes
+ *   68-70   touchpad mode (0 arrows, 1 swipes), dead zone, sensitivity
+ *   71      "CMB1"
+ *   72-73   the four swipe button lists, two per word, low then high 16 bits
+ *   74-81   eight combo slots: trigger in the low 16 bits, GBA buttons in the high
+ *
+ * A 72-word file (288 bytes) still loads. Saving writes 82 words (328 bytes).
  *
  * Files from older builds, and from the first QoL build ("QOL1", without
  * words 63-65), start with the 320x214 picture: older builds showed it
@@ -48,8 +54,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define CONFIG_WORDS 72
+#define CONFIG_WORDS 82
+#define LEGACY_CONFIG_WORDS 72
 #define QOL_MAGIC  0x334C4F51u   /* "QOL3" */
+#define SWIPE_CONFIG_MAGIC 0x31505753u /* "SWP1" */
+#define COMBO_CONFIG_MAGIC 0x31424D43u /* "CMB1" */
 #define QOL2_MAGIC 0x324C4F51u   /* "QOL2", before word 66 and the slot keys */
 #define QOL1_MAGIC 0x314C4F51u   /* "QOL1", the first QoL build's */
 #define GAME_FILE_VERSION 3
@@ -97,6 +106,9 @@ static const struct
   { "load_on_start", &nspire_load_on_start, 2 },
   { "compress_saves", &nspire_compress_saves, 2 },
   { "cpu_speed", &nspire_cpu_speed, CPU_SPEEDS },
+  { "touchpad_mode", &nspire_touchpad_swipe, 2 },
+  { "swipe_deadzone", &nspire_touchpad_deadzone, SWIPE_DEADZONE_CHOICES },
+  { "swipe_sensitivity", &nspire_touchpad_sensitivity, SWIPE_SENSITIVITY_CHOICES },
 };
 
 #define NUM_SETTINGS (int)(sizeof(settings) / sizeof(settings[0]))
@@ -120,6 +132,23 @@ static u32 cpu_speed_from_qol1(u32 old)
 /* The values for all games, while a game with its own is open. */
 static u32 global_values[NUM_SETTINGS];
 static key_binding global_keys[NUM_ACTIONS][KEY_SLOTS];
+static unsigned short global_swipes[NUM_SWIPE_DIRS];
+static combo_binding global_combos[NUM_COMBO_SLOTS];
+static const char *const swipe_ids[NUM_SWIPE_DIRS] = { "up", "down", "left", "right" };
+
+static void remember_global_keys(void)
+{
+  memcpy(global_keys, key_bindings, sizeof(global_keys));
+  memcpy(global_swipes, swipe_action_masks, sizeof(global_swipes));
+  memcpy(global_combos, combo_bindings, sizeof(global_combos));
+}
+
+static void use_global_keys(void)
+{
+  memcpy(key_bindings, global_keys, sizeof(global_keys));
+  memcpy(swipe_action_masks, global_swipes, sizeof(global_swipes));
+  memcpy(combo_bindings, global_combos, sizeof(global_combos));
+}
 static int game_open, own_settings, own_keys;
 /* The open game's file, kept from when it opened: by the time it closes,
  * gamepak_filename may already name the next game. */
@@ -220,7 +249,8 @@ s32 nspire_config_load(void)
    * 124 = +emulator options, 128 = +ROM buffer, 132 = +LCD cache, 136 = +FPS,
    * 140 = +blending, 144 = +dynarec SMC, 148 = +renderer, 152 = older
    * renderer), and this one's. */
-  if (!(size == 92 || (size >= 96 && size <= 152 && size % 4 == 0) || size == CONFIG_WORDS * 4))
+  if (!(size == 92 || (size >= 96 && size <= 152 && size % 4 == 0) ||
+        size == LEGACY_CONFIG_WORDS * 4 || size == CONFIG_WORDS * 4))
     return -1;
   words = (u32)size / 4;
 
@@ -302,6 +332,32 @@ s32 nspire_config_load(void)
     keys_add_default_if_free(key_bindings, ACTION_PREVIOUS_SLOT);
   }
 
+  /* Touchpad swipes stay off unless this file was written with them. */
+  nspire_touchpad_swipe = 0;
+  nspire_touchpad_deadzone = 2;
+  nspire_touchpad_sensitivity = 2;
+  combos_set_defaults(swipe_action_masks, combo_bindings);
+  if (words == CONFIG_WORDS && o[67] == SWIPE_CONFIG_MAGIC)
+  {
+    nspire_touchpad_swipe = o[68] % 2;
+    nspire_touchpad_deadzone = o[69] % SWIPE_DEADZONE_CHOICES;
+    nspire_touchpad_sensitivity = o[70] % SWIPE_SENSITIVITY_CHOICES;
+    if (o[71] == COMBO_CONFIG_MAGIC)
+    {
+      swipe_action_masks[0] = (unsigned short)(o[72] & 0x3FFu);
+      swipe_action_masks[1] = (unsigned short)((o[72] >> 16) & 0x3FFu);
+      swipe_action_masks[2] = (unsigned short)(o[73] & 0x3FFu);
+      swipe_action_masks[3] = (unsigned short)((o[73] >> 16) & 0x3FFu);
+      for (i = 0; i < NUM_COMBO_SLOTS; i++)
+      {
+        combo_bindings[i].trigger = binding_unpack(o[74 + i] & 0xFFFFu);
+        combo_bindings[i].action_mask = (unsigned short)((o[74 + i] >> 16) & 0x3FFu);
+      }
+    }
+  }
+  if (nspire_touchpad_swipe)
+    keys_add_swipe_defaults_if_free(key_bindings);
+
   clamp_rom_buffer_size();
   nspire_emulator_options_apply();
   return 0;
@@ -349,6 +405,18 @@ static int write_global_file(void)
   o[62] = nspire_fps_overlay;
   o[63] = nspire_brightness;
   o[66] = nspire_compress_saves % 2;
+  o[67] = SWIPE_CONFIG_MAGIC;
+  o[68] = nspire_touchpad_swipe % 2;
+  o[69] = nspire_touchpad_deadzone % SWIPE_DEADZONE_CHOICES;
+  o[70] = nspire_touchpad_sensitivity % SWIPE_SENSITIVITY_CHOICES;
+  o[71] = COMBO_CONFIG_MAGIC;
+  o[72] = (u32)(swipe_action_masks[0] & 0x3FFu) |
+          ((u32)(swipe_action_masks[1] & 0x3FFu) << 16);
+  o[73] = (u32)(swipe_action_masks[2] & 0x3FFu) |
+          ((u32)(swipe_action_masks[3] & 0x3FFu) << 16);
+  for (i = 0; i < NUM_COMBO_SLOTS; i++)
+    o[74 + i] = (binding_pack(combo_bindings[i].trigger) & 0xFFFFu) |
+                ((u32)(combo_bindings[i].action_mask & 0x3FFu) << 16);
 
   /* The copy in the saves folder, then the program file. */
   nspire_save_dir_make();
@@ -404,6 +472,15 @@ static void write_game_file(void)
       for (slot = 0; slot < KEY_SLOTS; slot++)
         fprintf(f, "key_%s%s=%u\n", action_ids[i], slot ? "_2" : "",
                 binding_pack(key_bindings[i][slot]));
+    for (i = 0; i < NUM_SWIPE_DIRS; i++)
+      fprintf(f, "swipe_mask_%s=%u\n", swipe_ids[i],
+              (unsigned)(swipe_action_masks[i] & 0x3FFu));
+    for (i = 0; i < NUM_COMBO_SLOTS; i++)
+    {
+      fprintf(f, "combo_key_%d=%u\n", i + 1, binding_pack(combo_bindings[i].trigger));
+      fprintf(f, "combo_mask_%d=%u\n", i + 1,
+              (unsigned)(combo_bindings[i].action_mask & 0x3FFu));
+    }
   }
   fclose(f);
 }
@@ -414,14 +491,18 @@ void nspire_config_open_game(const char *rom_path)
   u32 values[NUM_SETTINGS];
   unsigned char in_file[NUM_SETTINGS];
   key_binding keys[NUM_ACTIONS][KEY_SLOTS];
+  unsigned short swipes[NUM_SWIPE_DIRS];
+  combo_binding combos[NUM_COMBO_SLOTS];
   int has_settings = 0, has_keys = 0, version = 1, i;
   FILE *f;
 
   nspire_config_close_game();
   capture(global_values);
-  memcpy(global_keys, key_bindings, sizeof(global_keys));
+  remember_global_keys();
   memcpy(values, global_values, sizeof(values));
   memcpy(keys, key_bindings, sizeof(keys));
+  memcpy(swipes, swipe_action_masks, sizeof(swipes));
+  memcpy(combos, combo_bindings, sizeof(combos));
   memset(in_file, 0, sizeof(in_file));
   game_open = 1;
   own_settings = own_keys = 0;
@@ -452,6 +533,24 @@ void nspire_config_open_game(const char *rom_path)
           if (strlen(action_ids[i]) == len - (second ? 2 : 0) &&
               !strncmp(line + 4, action_ids[i], strlen(action_ids[i])))
             keys[i][second] = binding_unpack((unsigned)number);
+      }
+      else if (!strncmp(line, "swipe_mask_", 11))
+      {
+        for (i = 0; i < NUM_SWIPE_DIRS; i++)
+          if (!strcmp(line + 11, swipe_ids[i]))
+            swipes[i] = (unsigned short)(number & 0x3FFu);
+      }
+      else if (!strncmp(line, "combo_key_", 10) || !strncmp(line, "combo_mask_", 11))
+      {
+        int mask_line = line[6] == 'm';
+        int index = atoi(line + (mask_line ? 11 : 10));
+        if (index >= 1 && index <= NUM_COMBO_SLOTS)
+        {
+          if (mask_line)
+            combos[index - 1].action_mask = (unsigned short)(number & 0x3FFu);
+          else
+            combos[index - 1].trigger = binding_unpack((unsigned)number);
+        }
       }
       else
         for (i = 0; i < NUM_SETTINGS; i++)
@@ -487,6 +586,8 @@ void nspire_config_open_game(const char *rom_path)
       keys_add_default_if_free(keys, ACTION_PREVIOUS_SLOT);
     }
     memcpy(key_bindings, keys, sizeof(keys));
+    memcpy(swipe_action_masks, swipes, sizeof(swipes));
+    memcpy(combo_bindings, combos, sizeof(combos));
   }
   /* A raised CPU speed froze this game last time (nspire_clock.c). */
   if (nspire_clock_crashed_rom[0] && !strcmp(nspire_clock_crashed_rom, rom_path))
@@ -511,9 +612,9 @@ void nspire_config_close_game(void)
   else
     capture(global_values);
   if (own_keys)
-    memcpy(key_bindings, global_keys, sizeof(global_keys));
+    use_global_keys();
   else
-    memcpy(global_keys, key_bindings, sizeof(global_keys));
+    remember_global_keys();
   game_open = own_settings = own_keys = 0;
   nspire_settings_for = nspire_keys_for = 0;
   nspire_emulator_options_apply();
@@ -550,13 +651,13 @@ void nspire_config_keys_for_changed(void)
   }
   if (nspire_keys_for && !own_keys)
   {
-    memcpy(global_keys, key_bindings, sizeof(global_keys));
+    remember_global_keys();
     own_keys = 1;
   }
   else if (!nspire_keys_for && own_keys)
   {
     own_keys = 0;
-    memcpy(key_bindings, global_keys, sizeof(global_keys));
+    use_global_keys();
   }
 }
 
@@ -565,21 +666,27 @@ s32 nspire_config_save(void)
 {
   u32 live[NUM_SETTINGS];
   key_binding live_keys[NUM_ACTIONS][KEY_SLOTS];
+  unsigned short live_swipes[NUM_SWIPE_DIRS];
+  combo_binding live_combos[NUM_COMBO_SLOTS];
   s32 result;
 
   /* What isn't the game's own belongs to all games. */
   if (!(game_open && own_settings))
     capture(global_values);
   if (!(game_open && own_keys))
-    memcpy(global_keys, key_bindings, sizeof(global_keys));
+    remember_global_keys();
 
   capture(live);
   memcpy(live_keys, key_bindings, sizeof(live_keys));
+  memcpy(live_swipes, swipe_action_masks, sizeof(live_swipes));
+  memcpy(live_combos, combo_bindings, sizeof(live_combos));
   apply(global_values);
-  memcpy(key_bindings, global_keys, sizeof(global_keys));
+  use_global_keys();
   result = write_global_file();
   apply(live);
   memcpy(key_bindings, live_keys, sizeof(live_keys));
+  memcpy(swipe_action_masks, live_swipes, sizeof(live_swipes));
+  memcpy(combo_bindings, live_combos, sizeof(live_combos));
 
   write_game_file();
   return result;

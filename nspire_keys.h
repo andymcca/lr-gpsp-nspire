@@ -79,7 +79,25 @@ enum nspire_action
 #define KEY_LEFTUP  120
 #define KEY_SHIFT   121
 #define KEY_CTRL    122
-#define NUM_KEYS    128
+
+/* Virtual keys from a touchpad swipe. They are not keypad bits. A diagonal
+ * holds the horizontal and vertical keys together for as long as both axes
+ * stay past the dead zone. */
+#define KEY_SWIPE_UP     129
+#define KEY_SWIPE_DOWN   130
+#define KEY_SWIPE_LEFT   131
+#define KEY_SWIPE_RIGHT  132
+#define NUM_KEYS         132
+#define NUM_KEY_WORDS    ((NUM_KEYS + 31) / 32)
+
+#define NUM_GBA_ACTIONS  10
+#define NUM_SWIPE_DIRS   4
+#define NUM_COMBO_SLOTS  8
+
+#define SWIPE_DIR_UP     (1u << 0)
+#define SWIPE_DIR_DOWN   (1u << 1)
+#define SWIPE_DIR_LEFT   (1u << 2)
+#define SWIPE_DIR_RIGHT  (1u << 3)
 
 typedef struct
 {
@@ -87,16 +105,42 @@ typedef struct
   unsigned char with;
 } key_binding;
 
+/* One calculator key, or a key combination, or a swipe, holding several
+ * GBA buttons at once. action_mask bits 0..9 are ACTION_UP..ACTION_SELECT. */
+typedef struct
+{
+  key_binding trigger;
+  unsigned short action_mask;
+} combo_binding;
+
 extern key_binding key_bindings[NUM_ACTIONS][KEY_SLOTS];
+/* Empty means that swipe uses the key rows above. A non-empty list replaces
+ * those rows for that swipe while it is held. */
+extern unsigned short swipe_action_masks[NUM_SWIPE_DIRS];
+extern combo_binding combo_bindings[NUM_COMBO_SLOTS];
 extern const char *const action_names[NUM_ACTIONS];
+extern const char *const swipe_dir_names[NUM_SWIPE_DIRS];
+
+/* 0: a touch at the edge is a direction (the previous behavior). 1: swipes. */
+extern unsigned nspire_touchpad_swipe;
+extern unsigned nspire_touchpad_deadzone;
+extern unsigned nspire_touchpad_sensitivity;
+#define SWIPE_DEADZONE_CHOICES 7
+#define SWIPE_SENSITIVITY_CHOICES 7
 
 void keys_set_defaults(key_binding bindings[NUM_ACTIONS][KEY_SLOTS]);
+void combos_set_defaults(unsigned short swipes[NUM_SWIPE_DIRS],
+                         combo_binding combos[NUM_COMBO_SLOTS]);
 /* For settings from builds that had only actions 0 to first - 1: the newer
  * actions keep their default keys only where no older one uses that key. */
 void keys_drop_clashing_defaults(key_binding bindings[NUM_ACTIONS][KEY_SLOTS], int first);
 /* For settings written before an action had a default key: gives it that
  * key if the action has none and no action uses the key. */
 void keys_add_default_if_free(key_binding bindings[NUM_ACTIONS][KEY_SLOTS], int action);
+/* Puts SW-UP/DOWN/LEFT/RIGHT on the four directions' second key, when that
+ * slot is empty. Used when swipes are turned on, so arrows mode stays as it
+ * was. */
+void keys_add_swipe_defaults_if_free(key_binding bindings[NUM_ACTIONS][KEY_SLOTS]);
 /* A key's name, or NULL for a key that doesn't exist. */
 const char *key_name(unsigned key);
 /* Arrows and the touchpad click can't be bound: they always move. */
@@ -104,6 +148,15 @@ int key_is_reserved(unsigned key);
 int key_is_bindable(unsigned key);
 /* "ctrl", "shift+S" or "none". */
 const char *binding_name(key_binding b, char *text, size_t size);
+/* "A+B", "Up+Rt" or "none". */
+const char *action_mask_name(unsigned short mask, char *text, size_t size);
+/* Directions past the dead zone. dx/dy are touchpad units from where the
+ * finger landed; on the CX II, X grows right and Y grows up. Each axis is
+ * scaled by that axis's length, so a 4:3 pad is not biased, then by
+ * sensitivity_percent. Both axes are reported together when both qualify. */
+void touchpad_swipe_directions(int dx, int dy, unsigned width, unsigned height,
+                               unsigned deadzone_percent, unsigned sensitivity_percent,
+                               unsigned *out_dirs);
 /* A binding as one number for the settings files: key | with << 8. */
 unsigned binding_pack(key_binding b);
 key_binding binding_unpack(unsigned packed);

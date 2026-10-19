@@ -581,7 +581,7 @@ wait 1
         check(name in saves, "new calculator: %s in zgpSP_saves: %s" % (name, saves))
     check(os.path.getsize(program) == bare + 4096 + 16, "new calculator: the settings in the program file (%d -> %d)"
           % (bare, os.path.getsize(program)))
-    stored = open(program, "rb").read()[bare:bare + 288]
+    stored = open(program, "rb").read()[bare:bare + 328]
     check(stored == open(r.save("gpsp_qol.cfg.tns"), "rb").read(),
           "new calculator: the program's settings are the copy's")
     level = read_words(r.save("gpsp_qol.cfg.tns"))[63]
@@ -678,7 +678,7 @@ wait 1
                  "..cfg.tns"):
         check(os.path.exists(r.save(name)), "old saves folder: %s in zgpSP_saves" % name)
     stored = open(r.file(PROGRAM), "rb").read()
-    check(len(stored) == 4096 + 4096 + 16 and stored[4096:4096 + 288] == open(r.save("gpsp_qol.cfg.tns"), "rb").read(),
+    check(len(stored) == 4096 + 4096 + 16 and stored[4096:4096 + 328] == open(r.save("gpsp_qol.cfg.tns"), "rb").read(),
           "old saves folder: the settings went into the new program file")
     # gpSP sets its brightness level at start: (10 - level) * 25 on the register.
     check(level != 0 and r.notes["list"]["backlight"] == (10 - level) * 25,
@@ -745,7 +745,7 @@ wait 1
                  "Alpha.gba.cfg.tns", "Bravo.cfg.tns", "gba_bios.bin.tns"):
         check(os.path.exists(r.save(name)), "old layout: %s moved into zgpSP_saves" % name)
     stored = open(r.file(PROGRAM), "rb").read()
-    check(len(stored) == 4096 + 4096 + 16 and stored[4096:4096 + 288] == open(r.save("gpsp_qol.cfg.tns"), "rb").read(),
+    check(len(stored) == 4096 + 4096 + 16 and stored[4096:4096 + 328] == open(r.save("gpsp_qol.cfg.tns"), "rb").read(),
           "old layout: the settings went into the program file on the first start")
     check(open(r.save("gpsp_order_gba.txt.tns")).read().split()[0] == "Bravo.gba.tns",
           "old layout: the game order kept (Bravo first)")
@@ -1060,6 +1060,21 @@ wait 0.2
 press enter
 wait 0.3
 shot keys_top
+press up
+press up
+press up
+press up
+press up
+press up
+press up
+press up
+press up
+press up
+press up
+press up
+press up
+press up
+press up
 press up
 press up
 press up
@@ -1528,7 +1543,7 @@ def test_every_menu_line():
     lines = ["wait 1", "press enter", "wait 1.5", "press menu", "wait 0.3"]
     menus = (("graphics", 0, 11, [2, 3, 5, 6, 7, 8, 9, 10, 11, 13, 15]),
              ("emulator", 1, 9, [0, 2, 3, 4, 5, 6, 7, 9, 13]),
-             ("input", 5, 25, None),
+             ("input", 5, 40, None),
              ("cheats", 6, 16, list(range(10)) + [10, 11, 12, 13, 14, 15]))
     for name, index, count, _ in menus:
         lines += ["press down"] * index + ["press enter", "wait 0.3", "shot %s_00" % name]

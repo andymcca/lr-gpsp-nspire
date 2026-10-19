@@ -789,7 +789,9 @@ typedef enum
   SUBMENU_OPTION          = 0x04,
   ACTION_OPTION           = 0x08,
   KEY_SELECTION_OPTION    = 0x10,
-  KEY_BINDING_OPTION      = 0x20   /* Nspire: an action's two key bindings */
+  KEY_BINDING_OPTION      = 0x20,  /* Nspire: an action's two key bindings */
+  SWIPE_MULTI_OPTION      = 0x40,  /* Nspire: GBA buttons one swipe holds */
+  COMBO_SLOT_OPTION       = 0x80   /* Nspire: one key or swipe, several buttons */
 } menu_option_type_enum;
 
 struct _menu_type
@@ -861,9 +863,28 @@ typedef struct _menu_type menu_type;
 #define binding_option(action, line_number)                                   \
 {                                                                             \
   NULL, NULL, NULL, NULL, NULL, NULL, action,                                 \
-  "Left/right: key 1 or 2. Enter: set it (hold a key\n"                       \
-  "and press another for a combination). del: clear.",                       \
+  "Left/right: key 1 or 2. Enter: set it (a key\n"                       \
+  "or a swipe, or hold one and press another).\n"                            \
+  "Del clears it.",                                                           \
   line_number, KEY_BINDING_OPTION                                             \
+}
+
+#define swipe_multi_option(dir_index, line_number)                            \
+{                                                                             \
+  NULL, NULL, NULL, NULL, NULL, NULL, dir_index,                              \
+  "Enter picks the GBA buttons this swipe holds.\n"                           \
+  "A list here replaces that swipe's key row.\n"                              \
+  "Del clears it.",                                                           \
+  line_number, SWIPE_MULTI_OPTION                                             \
+}
+
+#define combo_slot_option(slot_index, line_number)                            \
+{                                                                             \
+  NULL, NULL, NULL, NULL, NULL, NULL, slot_index,                             \
+  "Left/right: trigger or buttons. Enter sets\n"                              \
+  "the trigger (a key or a swipe) or the buttons.\n"                          \
+  "Del clears that side.",                                                    \
+  line_number, COMBO_SLOT_OPTION                                              \
 }
 
 /* The main menu's slot lines, and the last line of options on the screen
@@ -1616,6 +1637,66 @@ void get_savestate_filename_noshot(u32 slot, u8 *name_buffer)
   }
 #endif
 
+#if defined(NSPIRE_LIBRETRO)
+/* Checklist of the ten GBA buttons. */
+static void gui_edit_action_mask(const char *title, unsigned short *io_mask)
+{
+  int cursor = 0;
+  int i;
+
+  keys_wait_release();
+  for (;;)
+  {
+    gui_action_type act;
+    char header[64];
+    char summary[40];
+
+    clear_screen(COLOR_BG);
+    action_mask_name(*io_mask, summary, sizeof(summary));
+    snprintf(header, sizeof(header), "%s: %s", title, summary);
+    print_string_pad(header, COLOR_ACTIVE_ITEM, COLOR_BG, 10, 10, 50);
+    print_string_pad("Enter toggles. Del clears. Esc is done.",
+                     COLOR_HELP_TEXT, COLOR_BG, 10, 22, 52);
+
+    for (i = 0; i < NUM_GBA_ACTIONS; i++)
+    {
+      char line[64];
+      u16 color = (cursor == i) ? COLOR_ACTIVE_ITEM : COLOR_INACTIVE_ITEM;
+      snprintf(line, sizeof(line), "%s [%c] %s",
+               cursor == i ? ">" : " ",
+               (*io_mask & (1u << i)) ? 'X' : ' ',
+               action_names[i]);
+      print_string_pad(line, color, COLOR_BG, 14, 40 + i * 12, 42);
+    }
+    print_string_pad(cursor == NUM_GBA_ACTIONS ? "> [Done]" : "  [Done]",
+                     cursor == NUM_GBA_ACTIONS ? COLOR_ACTIVE_ITEM : COLOR_INACTIVE_ITEM,
+                     COLOR_BG, 14, 40 + NUM_GBA_ACTIONS * 12 + 6, 42);
+    flip_screen();
+#ifdef NSPIRE_BUILD
+    update_at_vblank();
+#endif
+    act = get_gui_input();
+    if (act == CURSOR_UP)
+      cursor = (cursor - 1 + NUM_GBA_ACTIONS + 1) % (NUM_GBA_ACTIONS + 1);
+    else if (act == CURSOR_DOWN)
+      cursor = (cursor + 1) % (NUM_GBA_ACTIONS + 1);
+    else if (act == CURSOR_SELECT)
+    {
+      if (cursor < NUM_GBA_ACTIONS)
+        *io_mask ^= (unsigned short)(1u << cursor);
+      else
+        break;
+    }
+    else if (act == CURSOR_CLEAR)
+      *io_mask = 0;
+    else if (act == CURSOR_BACK || act == CURSOR_EXIT)
+      break;
+  }
+  *io_mask &= (unsigned short)((1u << NUM_GBA_ACTIONS) - 1u);
+  keys_wait_release();
+}
+#endif
+
 u32 menu(u16 *original_screen)
 {
   u8 print_buffer[81];
@@ -1644,12 +1725,25 @@ u32 menu(u16 *original_screen)
   u32 key_column = 0;          /* the key picked with left/right on key lines */
   u32 current_option_y = 0;
   char menu_status[80] = "";   /* what the last action did */
+  unsigned touchpad_was_swipes = nspire_touchpad_swipe;
   u8 *settings_for_options[] = { "all games", "this game only" };
+  u8 *touchpad_mode_options[] = { "arrows", "swipes" };
+  u8 *swipe_deadzone_options[] = { "3%", "5%", "8%", "10%", "12%", "15%", "20%" };
+  u8 *swipe_sensitivity_options[] = { "50%", "75%", "100%", "125%", "150%", "175%", "200%" };
 
   void menu_reset_keys()
   {
     keys_set_defaults(key_bindings);
+    if (nspire_touchpad_swipe)
+      keys_add_swipe_defaults_if_free(key_bindings);
     snprintf(menu_status, sizeof(menu_status), "Keys reset to gpSP's defaults.");
+  }
+
+  void menu_touchpad_changed()
+  {
+    if (nspire_touchpad_swipe && !touchpad_was_swipes)
+      keys_add_swipe_defaults_if_free(key_bindings);
+    touchpad_was_swipes = nspire_touchpad_swipe;
   }
 
   menu_option_type gamepad_config_options[] =
@@ -1676,14 +1770,39 @@ u32 menu(u16 *original_screen)
     binding_option(ACTION_RESTART, 19),
     binding_option(ACTION_BRIGHTER, 20),
     binding_option(ACTION_DIMMER, 21),
+    swipe_multi_option(0, 22),
+    swipe_multi_option(1, 23),
+    swipe_multi_option(2, 24),
+    swipe_multi_option(3, 25),
+    combo_slot_option(0, 26),
+    combo_slot_option(1, 27),
+    combo_slot_option(2, 28),
+    combo_slot_option(3, 29),
+    combo_slot_option(4, 30),
+    combo_slot_option(5, 31),
+    combo_slot_option(6, 32),
+    combo_slot_option(7, 33),
+    string_selection_option(menu_touchpad_changed, "Touchpad", touchpad_mode_options,
+     &nspire_touchpad_swipe, 2,
+     "Arrows: a touch at the edge is a direction.\n"
+     "Swipes: movement from where the finger landed.", 34),
+    string_selection_option(NULL, "Swipe dead zone", swipe_deadzone_options,
+     &nspire_touchpad_deadzone, SWIPE_DEADZONE_CHOICES,
+     "Ignore movement smaller than this share of\n"
+     "the touchpad. Each axis is measured alone.", 35),
+    string_selection_option(NULL, "Swipe sensitivity", swipe_sensitivity_options,
+     &nspire_touchpad_sensitivity, SWIPE_SENSITIVITY_CHOICES,
+     "Higher picks up a shorter movement. 100% is\n"
+     "the touchpad's own size.", 36),
     string_selection_option(nspire_config_keys_for_changed, "Keys for",
      settings_for_options, &nspire_keys_for, 2,
      "All games, or this game only: the game keeps its\n"
-     "own keys.", 23),
+     "own keys.", 37),
     action_option(menu_reset_keys, NULL, "Reset keys to defaults",
      "8 5 4 6, del A, var B, scratch L, doc R, shift\n"
-     "Start, ctrl Select, menu, F, L, S, Q, + and -.", 24),
-    submenu_option(NULL, "Back", "Return to the main menu.", 26)
+     "Start, ctrl Select, menu, F, L, S, Q, + and -.\n"
+     "Clears swipe lists and combo slots too.", 38),
+    submenu_option(NULL, "Back", "Return to the main menu.", 40)
   };
 
 
@@ -2537,8 +2656,8 @@ u32 menu(u16 *original_screen)
      "(or to load a savestate file from another game)", 4),
 #endif
 	submenu_option(&gamepad_config_menu, "Configure input",
-     "Two keys for each GBA button and hotkey, or key\n"
-     "combinations; for all games or this one.", 6),
+     "Two keys per button or hotkey, touchpad arrows\n"
+     "or swipes, and one input holding several buttons.", 6),
 #if !defined(GP2X_BUILD) && !defined(NSPIRE_BUILD)
     submenu_option(&analog_config_menu, "Configure analog input",
      "Select to change the in-game behavior of the PSP analog nub.", 7),
@@ -2811,6 +2930,30 @@ u32 menu(u16 *original_screen)
          action_names[action], cell,
          picked && key_column == 1 ? "[" : " ", second, picked && key_column == 1 ? "]" : " ");
       }
+      else if(display_option->option_type & SWIPE_MULTI_OPTION)
+      {
+        char mask_str[32];
+        u32 dir = display_option->num_options;
+        int picked = display_option == current_option;
+        action_mask_name(swipe_action_masks[dir], mask_str, sizeof(mask_str));
+        snprintf((char *)line_buffer, sizeof(line_buffer), "%-17s %s%s%s",
+         swipe_dir_names[dir], picked ? "[" : " ", mask_str, picked ? "]" : " ");
+      }
+      else if(display_option->option_type & COMBO_SLOT_OPTION)
+      {
+        char trig_str[24], mask_str[28], label[20], cell[32];
+        u32 slot = display_option->num_options;
+        int picked = display_option == current_option;
+        snprintf(label, sizeof(label), "Combo %u", (unsigned)(slot + 1));
+        binding_name(combo_bindings[slot].trigger, trig_str, sizeof(trig_str));
+        action_mask_name(combo_bindings[slot].action_mask, mask_str, sizeof(mask_str));
+        snprintf(cell, sizeof(cell), "%s%s%s",
+         picked && key_column == 0 ? "[" : " ", trig_str,
+         picked && key_column == 0 ? "]" : " ");
+        snprintf((char *)line_buffer, sizeof(line_buffer), "%-17s %-11s%s%s%s",
+         label, cell, picked && key_column == 1 ? "[" : " ", mask_str,
+         picked && key_column == 1 ? "]" : " ");
+      }
       else
 #endif
       if(display_option->option_type & NUMBER_SELECTION_OPTION)
@@ -2893,7 +3036,7 @@ u32 menu(u16 *original_screen)
       case CURSOR_RIGHT:
       case CURSOR_LEFT:
 #ifdef NSPIRE_BUILD
-        if(current_option->option_type & KEY_BINDING_OPTION)
+        if(current_option->option_type & (KEY_BINDING_OPTION | COMBO_SLOT_OPTION))
         {
           key_column ^= 1;
           break;
@@ -2941,6 +3084,33 @@ u32 menu(u16 *original_screen)
             key_bindings[current_option->num_options][key_column] = b;
           break;
         }
+        if(current_option->option_type & SWIPE_MULTI_OPTION)
+        {
+          u32 dir = current_option->num_options;
+          gui_edit_action_mask(swipe_dir_names[dir], &swipe_action_masks[dir]);
+          break;
+        }
+        if(current_option->option_type & COMBO_SLOT_OPTION)
+        {
+          u32 slot = current_option->num_options;
+          if(key_column == 0)
+          {
+            key_binding b;
+            print_string_pad("press a key or swipe (arrow cancels)", COLOR_ACTIVE_ITEM,
+             COLOR_BG, 10 + 18 * FONT_WIDTH, current_option_y, 36);
+            flip_screen();
+            b = key_capture();
+            if(b.key)
+              combo_bindings[slot].trigger = b;
+          }
+          else
+          {
+            char title[24];
+            snprintf(title, sizeof(title), "Combo %u buttons", (unsigned)(slot + 1));
+            gui_edit_action_mask(title, &combo_bindings[slot].action_mask);
+          }
+          break;
+        }
 #endif
         if(current_option->option_type & ACTION_OPTION)
           current_option->action_function();
@@ -2955,6 +3125,19 @@ u32 menu(u16 *original_screen)
         {
           key_bindings[current_option->num_options][key_column].key = 0;
           key_bindings[current_option->num_options][key_column].with = 0;
+        }
+        else if(current_option->option_type & SWIPE_MULTI_OPTION)
+          swipe_action_masks[current_option->num_options] = 0;
+        else if(current_option->option_type & COMBO_SLOT_OPTION)
+        {
+          u32 slot = current_option->num_options;
+          if(key_column == 0)
+          {
+            combo_bindings[slot].trigger.key = 0;
+            combo_bindings[slot].trigger.with = 0;
+          }
+          else
+            combo_bindings[slot].action_mask = 0;
         }
         break;
 #endif

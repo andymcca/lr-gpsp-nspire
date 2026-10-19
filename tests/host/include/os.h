@@ -23,7 +23,13 @@ typedef enum
   TPAD_ARROW_DOWN, TPAD_ARROW_DOWNLEFT, TPAD_ARROW_LEFT, TPAD_ARROW_LEFTUP, TPAD_ARROW_CLICK
 } tpad_arrow_t;
 
+typedef struct
+{
+  unsigned short width, height;
+} touchpad_info_t;
+
 int touchpad_scan(touchpad_report_t *report);
+touchpad_info_t *touchpad_getinfo(void);
 int on_key_pressed(void);
 void cfg_register_fileext(const char *ext, const char *prgm);
 const char *get_documents_dir(void);
