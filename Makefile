@@ -73,7 +73,7 @@ LOCAL_OBJS := \
   nspire_input.o nspire_stubs.o nspire_backup.o nspire_stack_glue.o \
   nspire_video_renderer_dispatch.o video_cc_renderer.o old_video_renderer.o \
   video_blend.o upscale_aspect.o scanline_fill16.o nspire_upscale_from_gba.o nspire_turn.o nspire.o nspire_rom_load_diag.o \
-  nspire_gbz.o nspire_states.o nspire_config.o nspire_clock.o clock_switch_nspire.o nspire_keys.o \
+  nspire_gbz.o nspire_states.o nspire_config.o nspire_clock.o nspire_cx_clock.o clock_switch_nspire.o nspire_keys.o \
   nspire_brightness.o nspire_game_list.o nspire_blend.o \
   nspire_zip.o nspire_loading.o nspire_save_manager.o nspire_paths.o \
   nspire_selfstore.o nspire_rom_convert.o nspire_rom_manager.o

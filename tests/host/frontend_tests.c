@@ -779,6 +779,32 @@ static void test_game_list(void)
   CHECK(file_size(order_path) < 0, "sorting A to Z forgets it");
 }
 
+static void test_cx_clock(void)
+{
+  unsigned stock = (1u << 1) | (1u << 12) | (44u << 15) | (2u << 21);
+  unsigned extra = stock | 1u | (1u << 23);
+  unsigned word;
+
+  CHECK(nspire_cx_cpu_mhz(stock) == 132, "stock CX is %u MHz", nspire_cx_cpu_mhz(stock));
+  CHECK(nspire_cx_ahb_mhz(stock) == 66, "stock bus is %u MHz", nspire_cx_ahb_mhz(stock));
+  word = nspire_cx_clock_word(extra, 198);
+  CHECK(nspire_cx_cpu_mhz(word) == 198 && nspire_cx_ahb_mhz(word) == 66,
+        "198 MHz, bus %u", nspire_cx_ahb_mhz(word));
+  CHECK((word & (1u | (1u << 23))) == (1u | (1u << 23)), "untouched clock bits stay");
+  word = nspire_cx_clock_word(stock, 180);
+  CHECK(nspire_cx_cpu_mhz(word) == 180 && nspire_cx_ahb_mhz(word) <= 66, "180 MHz");
+  word = nspire_cx_clock_word(stock, 210);
+  CHECK(nspire_cx_cpu_mhz(word) == 210 && nspire_cx_ahb_mhz(word) <= 66, "210 MHz");
+  word = nspire_cx_clock_word(stock, 222);
+  CHECK(nspire_cx_cpu_mhz(word) == 222 && nspire_cx_ahb_mhz(word) <= 66, "222 MHz");
+  word = nspire_cx_clock_word(stock, 234);
+  CHECK(nspire_cx_cpu_mhz(word) == 234 && nspire_cx_ahb_mhz(word) == 58,
+        "234 MHz bus %u", nspire_cx_ahb_mhz(word));
+  CHECK(nspire_cx_clock_word(stock | (1u << 8), 198) == 0, "a 48 MHz base is left alone");
+  CHECK(nspire_cx_clock_word(stock, 240) == 0 && nspire_cx_clock_word(stock, 378) == 0,
+        "240 and 378 MHz are not offered");
+}
+
 int main(int argc, char **argv)
 {
   if (argc < 2)
@@ -805,6 +831,8 @@ int main(int argc, char **argv)
   test_slot_keys();
   printf("brightness\n");
   test_brightness();
+  printf("CX clock\n");
+  test_cx_clock();
   printf("file list order\n");
   test_game_list();
   printf("%d checks, %d failed\n", checks, failures);

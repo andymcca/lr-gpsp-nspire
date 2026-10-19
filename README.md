@@ -77,7 +77,8 @@ calculator. Now gpSP shows "Stopped", the game and where it jumped, and the
 file list comes back; no state is saved of it. A good copy of the game is
 the fix for that one.
 
-**Screen.** On the CX II the picture is turned for the portrait LCD in software
+**Screen.** Both models have a 320x240 color panel. The CX scans it landscape
+(320 wide). The CX II scans it portrait (240 wide), so on the CX II the picture is turned for the portrait LCD in software
 and shown from one of three buffers, which the LCD switches between only
 between refreshes: no diagonal tearing (that came from Ndless's compatibility
 mode, which turned the picture inside the panel), and no tearing at all.
@@ -212,12 +213,15 @@ it draws a second at normal speed, as in PocketSNES) or detailed (ms per frame r
 drawing, showing, idle; logged to `gpsp_perf.txt.tns`). *Run speed test* runs
 the game from where it is for 20 seconds (normal play, no speed limit with every
 frame drawn, no limit with nothing drawn) and writes `gpsp_results.txt.tns`.
-*CPU speed (CX II)* in Emulator options: normal, or 408 to 504 MHz in 12 MHz
-steps while a game runs (PocketSNES's clock switch and list). Try 432 first:
-on the calculator this was made on, 456 glitched now and then and 480 froze
-in PocketSNES. If a speed freezes the calculator, the next start goes back to
-normal (marker file `gpsp_clock.tns`). The speed test's file also records the
-clock register and the backlight value gpSP found.
+*CPU speed* in Emulator options follows the calculator. On a CX II: normal,
+or 408 to 504 MHz in 12 MHz steps while a game runs (PocketSNES's clock
+switch and list). Try 432 first: on the calculator this was made on, 456
+glitched now and then and 480 froze in PocketSNES. On a CX: normal, or 180,
+198, 210, 222 and 234 MHz, on the CX's own clock. Try 198 first: 234 freezes
+some calculators. The bus stays at or under 66 MHz. If a speed freezes the
+calculator, the next start goes back to normal (marker file `gpsp_clock.tns`).
+The speed test's file also records the clock register and the backlight
+value gpSP found.
 
 **Other.** Opening a `.gba.tns` or `.gbz.tns` from the calculator's documents
 starts gpSP. Ndless finds the program for a file type by its name, so gpSP
