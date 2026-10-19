@@ -10,6 +10,7 @@
 #include "nspire_frontend.h"
 #include "nspire_gui_video.h"
 #include "nspire_keys.h"
+#include "input.h"
 #include "nspire_brightness.h"
 #include "nspire_game_list.h"
 #include "nspire_clock.h"
@@ -217,6 +218,69 @@ static void test_turn_rects(void)
   }
 }
 
+extern void unit_set_key(unsigned key, int down);
+extern void unit_set_touchpad(int contact, unsigned x, unsigned y);
+u32 nspire_input_frame(void);
+void nspire_input_release_all(void);
+
+static void test_swipe_input_pipeline(void)
+{
+  u32 p1;
+
+  keys_set_defaults(key_bindings);
+  nspire_touchpad_swipe = 1;
+  nspire_touchpad_deadzone = 2;      /* 8% */
+  nspire_touchpad_sensitivity = 2;  /* 100% */
+  unit_set_key(KEY_SHIFT, 0);
+  unit_set_touchpad(0, 100, 100);
+  nspire_input_release_all();
+  keys_poll();
+
+  /* Touch establishes a relative origin; it must not trigger a direction. */
+  unit_set_touchpad(1, 100, 100);
+  keys_poll();
+  CHECK(!key_down(KEY_SWIPE_RIGHT) && !key_down(KEY_SWIPE_UP),
+        "touching the pad without moving does not trigger swipe inputs");
+
+  /* A right/up diagonal on the 4:3 pad activates separate X and Y components
+   * plus its dedicated 8-way gesture input. */
+  unit_set_touchpad(1, 160, 130);
+  keys_poll();
+  CHECK(key_down(KEY_SWIPE_RIGHT) && key_down(KEY_SWIPE_UP) &&
+        key_down(KEY_SWIPE_UP_RIGHT),
+        "diagonal movement activates its X, Y, and diagonal swipe inputs");
+
+  /* A swipe may bind to more than one GBA button. A separate combination
+   * binds the same swipe plus SHIFT to A. */
+  keys_set_defaults(key_bindings);
+  key_bindings[ACTION_A][0] = binding_unpack(KEY_SWIPE_RIGHT | (KEY_SHIFT << 8));
+  key_bindings[ACTION_B][0] = binding_unpack(KEY_SWIPE_RIGHT);
+  key_bindings[ACTION_L][0] = binding_unpack(KEY_SWIPE_RIGHT);
+  unit_set_touchpad(0, 160, 130);
+  unit_set_key(KEY_SHIFT, 0);
+  keys_poll();
+  unit_set_touchpad(1, 100, 100);
+  keys_poll();
+  unit_set_touchpad(1, 160, 100);
+  nspire_input_frame();
+  p1 = read_ioreg(REG_P1);
+  CHECK(!(p1 & BUTTON_B) && !(p1 & BUTTON_L) && (p1 & BUTTON_A),
+        "one swipe drives two mapped GBA buttons while the key combo stays inactive");
+
+  unit_set_key(KEY_SHIFT, 1);
+  nspire_input_frame();
+  p1 = read_ioreg(REG_P1);
+  CHECK(!(p1 & BUTTON_A) && !(p1 & BUTTON_B) && !(p1 & BUTTON_L),
+        "a swipe plus a physical calculator key activates the combo alongside other mapped buttons");
+
+  unit_set_key(KEY_SHIFT, 0);
+  unit_set_touchpad(0, 160, 100);
+  keys_poll();
+  nspire_input_release_all();
+  keys_set_defaults(key_bindings);
+  unit_set_touchpad(0, 100, 100);
+}
+
 static void test_keys(void)
 {
   char text[32];
@@ -226,7 +290,45 @@ static void test_keys(void)
   keys_set_defaults(key_bindings);
   CHECK(key_bindings[ACTION_A][0].key == KEY_DEL && key_bindings[ACTION_MENU][0].key == KEY_MENU,
         "defaults");
-  CHECK(key_bindings[ACTION_RESTART][0].key == 0 && key_bindings[ACTION_A][1].key == 0, "new ones unbound");
+  CHECK(key_bindings[ACTION_RESTART][0].key == 0, "new ones unbound");
+  CHECK(key_bindings[ACTION_UP][1].key == KEY_SWIPE_UP &&
+        key_bindings[ACTION_DOWN][1].key == KEY_SWIPE_DOWN &&
+        key_bindings[ACTION_LEFT][1].key == KEY_SWIPE_LEFT &&
+        key_bindings[ACTION_RIGHT][1].key == KEY_SWIPE_RIGHT,
+        "swipe components are the secondary D-pad defaults");
+
+  CHECK(!strcmp(key_name(KEY_SWIPE_UP), "SW-UP") &&
+        !strcmp(key_name(KEY_SWIPE_UP_RIGHT), "SW-UPRIGHT") &&
+        key_is_bindable(KEY_SWIPE_UP_RIGHT), "swipe keys have names and are bindable");
+  CHECK(touchpad_swipe_direction_mask(0, 0, 320, 240, 10, 100) == 0,
+        "touching without movement stays in the dead zone");
+  CHECK(touchpad_swipe_direction_mask(64, 0, 320, 240, 10, 100) == SWIPE_DIR_RIGHT,
+        "right swipe is relative to its start point");
+  CHECK(touchpad_swipe_direction_mask(0, 48, 320, 240, 10, 100) == SWIPE_DIR_UP,
+        "up swipe follows the calculator's Y-coordinate convention");
+  CHECK(touchpad_swipe_direction_mask(64, 48, 320, 240, 10, 100) ==
+        (SWIPE_DIR_UP | SWIPE_DIR_RIGHT), "diagonal keeps independent X/Y components");
+  CHECK(touchpad_swipe_direction_mask(32, 24, 320, 240, 10, 100) ==
+        (SWIPE_DIR_UP | SWIPE_DIR_RIGHT), "4:3 normalized components have equal weights");
+  CHECK(touchpad_swipe_direction_mask(32, 24, 320, 240, 10, 50) == 0,
+        "lower sensitivity suppresses weaker movement");
+  CHECK(touchpad_swipe_direction_mask(32, 24, 320, 240, 5, 50) ==
+        (SWIPE_DIR_UP | SWIPE_DIR_RIGHT), "smaller dead zone picks up the same movement");
+  CHECK(touchpad_swipe_direction_mask(-64, -48, 320, 240, 10, 100) ==
+        (SWIPE_DIR_DOWN | SWIPE_DIR_LEFT), "down-left swipe direction");
+  CHECK(touchpad_swipe_direction_mask(20, 0, 0, 240, 10, 100) == 0,
+        "zero width is safe");
+
+  b = binding_unpack(KEY_SWIPE_UP_RIGHT | (KEY_SHIFT << 8));
+  CHECK(b.key == KEY_SWIPE_UP_RIGHT && b.with == KEY_SHIFT,
+        "diagonal swipe can combine with a physical key");
+  CHECK(binding_pack(b) == (KEY_SWIPE_UP_RIGHT | (KEY_SHIFT << 8)),
+        "swipe plus physical key packs and unpacks");
+  key_bindings[ACTION_A][0] = binding_unpack(KEY_SWIPE_UP_RIGHT);
+  key_bindings[ACTION_B][0] = binding_unpack(KEY_SWIPE_UP_RIGHT);
+  CHECK(key_bindings[ACTION_A][0].key == key_bindings[ACTION_B][0].key,
+        "one diagonal swipe can be assigned to multiple GBA actions");
+  keys_set_defaults(key_bindings);
 
   b = binding_unpack(KEY_S | (KEY_SHIFT << 8));
   CHECK(b.key == KEY_S && b.with == KEY_SHIFT, "unpack combo");
@@ -288,6 +390,9 @@ static void test_config(void)
   nspire_load_on_start = 1;
   nspire_cpu_speed = 2;
   nspire_rom_buffer_size_choice = 12;
+  nspire_touchpad_swipe = 0;
+  nspire_touchpad_deadzone = 5;
+  nspire_touchpad_sensitivity = 6;
   CHECK(nspire_config_save() == 0, "save");
   CHECK(file_size(path) == 288, "gpsp_qol.cfg.tns is %ld bytes", file_size(path));
   CHECK(file_size(old_path) < 0, "older builds' gpsp.cfg.tns left alone");
@@ -300,11 +405,16 @@ static void test_config(void)
   nspire_auto_increment = nspire_save_on_exit = nspire_load_on_start = 1;
   nspire_cpu_speed = 0;
   nspire_rom_buffer_size_choice = 8;
+  nspire_touchpad_swipe = 1;
+  nspire_touchpad_deadzone = 2;
+  nspire_touchpad_sensitivity = 2;
   CHECK(nspire_config_load() == 0, "load");
   CHECK(screen_scale == fullscreen && current_frameskip_type == manual_frameskip && frameskip_value == 3,
         "graphics settings %u %u %u", screen_scale, current_frameskip_type, frameskip_value);
   CHECK(nspire_fps_overlay == 2 && !nspire_auto_increment && !nspire_save_on_exit && nspire_load_on_start &&
         nspire_cpu_speed == 2 && nspire_rom_buffer_size_choice == 12, "the new settings");
+  CHECK(nspire_touchpad_swipe == 0 && nspire_touchpad_deadzone == 5 &&
+        nspire_touchpad_sensitivity == 6, "swipe settings survive save/load");
   CHECK(key_bindings[ACTION_A][0].key == KEY_DEL && key_bindings[ACTION_A][1].key == KEY_7, "A's keys");
   CHECK(key_bindings[ACTION_SAVE_STATE][1].key == KEY_S && key_bindings[ACTION_SAVE_STATE][1].with == KEY_SHIFT,
         "combo kept");
@@ -345,6 +455,11 @@ static void test_config(void)
    * what their settings start with. */
   CHECK(screen_scale == scaled_raw && current_frameskip_type == manual_frameskip && frameskip_value == 2 &&
         nspire_fps_overlay == 1 && nspire_video_renderer_choice == 1, "old settings");
+  CHECK(nspire_touchpad_swipe == 1 && nspire_touchpad_deadzone == 2 &&
+        nspire_touchpad_sensitivity == 2, "legacy config gets safe swipe defaults");
+  CHECK(key_bindings[ACTION_UP][1].key == KEY_SWIPE_UP &&
+        key_bindings[ACTION_RIGHT][1].key == KEY_SWIPE_RIGHT,
+        "legacy config gains swipe defaults without replacing primary keys");
   CHECK(key_bindings[ACTION_A][0].key == KEY_CTRL && key_bindings[ACTION_MENU][0].key == KEY_ESC &&
         key_bindings[ACTION_QUIT][0].key == KEY_Q, "old keys");
   CHECK(key_bindings[ACTION_L][0].key == 0 && key_bindings[ACTION_R][0].key == 0, "unbound and garbage keys");
@@ -499,6 +614,9 @@ static void test_config_versions(void)
     fclose(f);
   CHECK(o[37] == 0x334C4F51u && o[61] == 5 && o[0] == scaled_raw && o[66] == 1,
         "QOL3 %08x, cpu %u, scale %u, compress %u", o[37], o[61], o[0], o[66]);
+  CHECK(o[67] == 0x31505753u && o[68] == nspire_touchpad_swipe &&
+        o[69] == nspire_touchpad_deadzone && o[70] == nspire_touchpad_sensitivity,
+        "swipe options use reserved config words");
 
   /* A game's own settings from the first QoL build (no version line). */
   snprintf(rom, sizeof(rom), "%s/Old.gba.tns", dir);
@@ -511,7 +629,7 @@ static void test_config_versions(void)
   CHECK(screen_scale == scaled_raw && nspire_cpu_speed == 7 && frameskip_value == 6,
         "game file: scale %u cpu %u frameskip %u", screen_scale, nspire_cpu_speed, frameskip_value);
   nspire_config_close_game();
-  CHECK(file_contains(game_cfg, "version=3") && file_contains(game_cfg, "cpu_speed=7"), "rewritten");
+  CHECK(file_contains(game_cfg, "version=5") && file_contains(game_cfg, "cpu_speed=7"), "rewritten");
   nspire_config_open_game(rom);
   CHECK(nspire_cpu_speed == 7 && screen_scale == scaled_raw, "a version 3 file is read as it is");
   screen_scale = unscaled;
@@ -647,12 +765,22 @@ static void test_slot_keys(void)
   f = fopen(game_cfg, "w");
   fprintf(f, "version=2\nown_keys=1\nkey_next_slot=0\nkey_previous_slot=0\nkey_a=%u\n", KEY_RPAREN);
   fclose(f);
+  /* Simulate an all-games map that cleared a swipe slot; old game-specific
+   * profiles didn't know about swipes, so the missing defaults are restored
+   * only in that legacy profile and the global user's choice is preserved. */
+  key_bindings[ACTION_UP][1].key = 0;
+  key_bindings[ACTION_RIGHT][1].key = 0;
   nspire_config_open_game(rom);
   CHECK(key_bindings[ACTION_A][0].key == KEY_RPAREN, "the game's A is )");
   CHECK(key_bindings[ACTION_NEXT_SLOT][0].key == 0, "so its next slot has no key");
   CHECK(key_bindings[ACTION_PREVIOUS_SLOT][0].key == KEY_LPAREN, "and its previous slot gets (");
+  CHECK(key_bindings[ACTION_UP][1].key == KEY_SWIPE_UP &&
+        key_bindings[ACTION_RIGHT][1].key == KEY_SWIPE_RIGHT,
+        "legacy per-game key map gets missing swipe defaults");
   nspire_config_close_game();
-  CHECK(file_contains(game_cfg, "version=3"), "the game file is version 3 now");
+  CHECK(key_bindings[ACTION_UP][1].key == 0 && key_bindings[ACTION_RIGHT][1].key == 0,
+        "legacy game's defaults do not overwrite the all-games map");
+  CHECK(file_contains(game_cfg, "version=5"), "the game file is version 5 now");
   remove(game_cfg);
   nspire_compress_saves = 1;
   remove(path);
@@ -796,6 +924,8 @@ int main(int argc, char **argv)
   test_turn_rects();
   printf("key bindings\n");
   test_keys();
+  printf("touchpad swipe pipeline\n");
+  test_swipe_input_pipeline();
   printf("settings files\n");
   test_config();
   test_config_versions();

@@ -789,7 +789,9 @@ typedef enum
   SUBMENU_OPTION          = 0x04,
   ACTION_OPTION           = 0x08,
   KEY_SELECTION_OPTION    = 0x10,
-  KEY_BINDING_OPTION      = 0x20   /* Nspire: an action's two key bindings */
+  KEY_BINDING_OPTION      = 0x20,  /* Nspire: an action's two key bindings */
+  SWIPE_MULTI_OPTION      = 0x40,  /* Nspire: a swipe direction's multi-GBA mask */
+  COMBO_SLOT_OPTION       = 0x80   /* Nspire: a custom key/swipe -> multi-GBA mask */
 } menu_option_type_enum;
 
 struct _menu_type
@@ -861,9 +863,30 @@ typedef struct _menu_type menu_type;
 #define binding_option(action, line_number)                                   \
 {                                                                             \
   NULL, NULL, NULL, NULL, NULL, NULL, action,                                 \
-  "Left/right: key 1 or 2. Enter: set it (hold a key\n"                       \
-  "and press another for a combination). del: clear.",                       \
+  "Enter captures a key or swipe. Hold physical\n"                            \
+  "keys and swipe at the same time in-game.\n"                                \
+  "Reuse inputs on rows; Del clears.",                                        \
   line_number, KEY_BINDING_OPTION                                             \
+}
+
+/* Direct multi-button mapping for one of the 4 orthogonal swipe components. */
+#define swipe_multi_option(dir_index, line_number)                            \
+{                                                                             \
+  NULL, NULL, NULL, NULL, NULL, NULL, dir_index,                              \
+  "Enter opens the GBA multi-control checklist\n"                             \
+  "for this swipe component. Diagonal swipes\n"                               \
+  "split into H + V weighted by 4:3 angle.",                                  \
+  line_number, SWIPE_MULTI_OPTION                                             \
+}
+
+/* Custom calculator key / key+with / swipe -> arbitrary multi-GBA combo. */
+#define combo_slot_option(slot_index, line_number)                            \
+{                                                                             \
+  NULL, NULL, NULL, NULL, NULL, NULL, slot_index,                             \
+  "Left col: Enter captures key/swipe trigger.\n"                             \
+  "Right col: Enter picks multiple GBA controls\n"                            \
+  "to fire together. Works with other keys!",                                 \
+  line_number, COMBO_SLOT_OPTION                                              \
 }
 
 /* The main menu's slot lines, and the last line of options on the screen
@@ -1049,472 +1072,6 @@ s32 save_config_file()
   return nspire_config_save();
 }
 
-#else
-s32 load_game_config_file()
-{
-  u8 game_config_filename[512];
-  u32 file_loaded = 0;
-  u32 i;
-#ifdef NSPIRE_BUILD
-  change_ext(gamepak_filename, game_config_filename, ".cfg.tns");
-#else
-  change_ext(gamepak_filename, game_config_filename, ".cfg");
-#endif
-
-  file_open(game_config_file, game_config_filename, read);
-
-  if(file_check_valid(game_config_file))
-  {
-    u32 file_size = file_length(game_config_filename, game_config_file);
-
-#if defined(NSPIRE_LIBRETRO)
-    if (file_size == 64)
-    {
-      u32 file_options[16];
-
-      file_read_array(game_config_file, file_options);
-      {
-        u32 r0 = file_options[0];
-        u32 r15 = file_options[15];
-        if ((r15 & GPSP_GAME_FS_V2_MARK) == GPSP_GAME_FS_V2_MARK)
-          current_frameskip_type = (frameskip_type)(r0 % 3);
-        else
-        {
-          static const frameskip_type om[] = {
-            no_frameskip, auto_frameskip, auto_frameskip, manual_frameskip
-          };
-          current_frameskip_type = om[r0 % 4];
-        }
-      }
-      frameskip_value = file_options[1];
-      random_skip = file_options[2] % 2;
-      clock_speed = file_options[3];
-
-      if (clock_speed > 300)
-        clock_speed = 132;
-      if (clock_speed < 33)
-        clock_speed = 33;
-
-      if (frameskip_value > 99)
-        frameskip_value = 99;
-      if (frameskip_value < 1 && current_frameskip_type == auto_frameskip)
-        frameskip_value = 4;
-
-      for (i = 0; i < 10; i++)
-      {
-        cheats[i].cheat_active = file_options[4 + i] % 2;
-        cheats[i].cheat_name[0] = 0;
-      }
-
-      quick_save_slot = file_options[14];
-
-      file_loaded = 1;
-    }
-    else if (file_size == 60)
-    {
-      u32 file_options[15];
-
-      file_read_array(game_config_file, file_options);
-      {
-        u32 old_type = file_options[0] % 3;
-        if (old_type == 2)
-          current_frameskip_type = no_frameskip;
-        else if (old_type == 1)
-          current_frameskip_type = manual_frameskip;
-        else
-          current_frameskip_type = auto_frameskip;
-      }
-      frameskip_value = file_options[1];
-      if (frameskip_value > 99)
-        frameskip_value = 99;
-      if (frameskip_value < 1 && current_frameskip_type == auto_frameskip)
-        frameskip_value = 4;
-
-      random_skip = file_options[2] % 2;
-      clock_speed = file_options[3];
-
-      if (clock_speed > 300)
-        clock_speed = 132;
-      if (clock_speed < 33)
-        clock_speed = 33;
-
-      for (i = 0; i < 10; i++)
-      {
-        cheats[i].cheat_active = file_options[4 + i] % 2;
-        cheats[i].cheat_name[0] = 0;
-      }
-
-      quick_save_slot = file_options[14];
-
-      file_loaded = 1;
-    }
-#else
-    /* Sanity check: File size must be the right size */
-    if(file_size == 60)
-    {
-      u32 file_options[file_size / 4];
-
-      file_read_array(game_config_file, file_options);
-      current_frameskip_type = file_options[0] % 3;
-      frameskip_value = file_options[1];
-      random_skip = file_options[2] % 2;
-      clock_speed = file_options[3];
-
-#ifdef WIZ_BUILD
-      if(clock_speed > 900)
-        clock_speed = 533;
-#elif defined(GP2X_BUILD)
-      if(clock_speed >= 300)
-        clock_speed = 200;
-#elif defined(PSP_BUILD)
-      if(clock_speed > 333)
-        clock_speed = 333;
-#elif defined(NSPIRE_BUILD)
-	  if(clock_speed > 300)
-	    clock_speed = 132;
-#endif
-
-      if(clock_speed < 33)
-        clock_speed = 33;
-
-      if(frameskip_value < 0)
-        frameskip_value = 0;
-
-      if(frameskip_value > 99)
-        frameskip_value = 99;
-
-      for(i = 0; i < 10; i++)
-      {
-        cheats[i].cheat_active = file_options[4 + i] % 2;
-        cheats[i].cheat_name[0] = 0;
-      }
-      
-	  quick_save_slot = file_options[14];
-	  
-      file_loaded = 1;
-    }
-#endif
-	file_close(game_config_file);
-  }
-
-  if(file_loaded)
-    return 0;
-
-#if defined(NSPIRE_LIBRETRO)
-  current_frameskip_type = manual_frameskip;
-  frameskip_value = 2;
-  random_skip = 0;
-#else
-  current_frameskip_type = auto_frameskip;
-  frameskip_value = 4;
-#ifdef WIZ_BUILD
-  frameskip_value = 1;
-#endif
-  random_skip = 0;
-#endif
-  clock_speed = default_clock_speed;
-
-  for(i = 0; i < 10; i++)
-  {
-    cheats[i].cheat_active = 0;
-    cheats[i].cheat_name[0] = 0;
-  }
-
-  return -1;
-}
-
-s32 load_config_file()
-{
-  u8 config_path[512];
-
-  #if (defined(PSP_BUILD) || defined(ARM_ARCH)) && !defined(_WIN32_WCE)
-    sprintf(config_path, "%s/%s", main_path, GPSP_CONFIG_FILENAME);
-  #else
-    sprintf(config_path, "%s\\%s", main_path, GPSP_CONFIG_FILENAME);
-  #endif
-
-  file_open(config_file, config_path, read);
-
-  if(file_check_valid(config_file))
-  {
-    u32 file_size = file_length(config_path, config_file);
-
-    // Sanity check: file sizes by feature growth:
-    // 96 = +BIOS, 112 = +frameskip, 124 = +emulator options, 128 = +ROM buffer size,
-    // 132 = +LCD cache mode, 136 = +FPS overlay, 140 = +GBA blend skip, 144 = +dynarec SMC policy,
-    // 148 = legacy (extra u32 for removed RAM block reuse option; ignored), 152 = +video renderer.
-    if(file_size == 92
-#if defined(NSPIRE_LIBRETRO)
-     || file_size == 96
-     || file_size == 112
-     || file_size == 124
-     || file_size == 128
-     || file_size == 132
-     || file_size == 136
-     || file_size == 140
-     || file_size == 144
-     || file_size == 148
-     || file_size == 152
-#endif
-     )
-    {
-      u32 words = file_size / 4;
-#if defined(NSPIRE_LIBRETRO)
-      u32 file_options[38];
-#else
-      u32 file_options[28];
-#endif
-      u32 i;
-      s32 menu_button = -1;
-
-      memset(file_options, 0, sizeof(file_options));
-      file_read(config_file, file_options, words * sizeof(u32));
-
-      screen_scale = file_options[0] %
-        (sizeof(scale_options) / sizeof(scale_options[0]));
-      screen_filter = file_options[1] % 2;
-      global_enable_audio = file_options[2] % 2;
-
-#ifdef PSP_BUILD
-      audio_buffer_size_number = file_options[3] % 10;
-#else
-      audio_buffer_size_number = file_options[3] % 11;
-#endif
-
-      update_backup_flag = file_options[4] % 2;
-      global_enable_analog = file_options[5] % 2;
-      analog_sensitivity_level = file_options[6] % 8;
-
-#ifdef PSP_BUILD
-    scePowerSetClockFrequency(clock_speed, clock_speed, clock_speed / 2);
-#endif
-
-      // Sanity check: Make sure there's a MENU or FRAMESKIP
-      // key, if not assign to triangle
-
-#ifndef PC_BUILD
-#ifdef NSPIRE_BUILD
-	  for(i = 0; i < 16; i++)
-	  {
-	    gamepad_config_map[i] = file_options[7 + i];
-		if(gamepad_config_map[i] > 128 || nspire_key_strings[gamepad_config_map[i]] == NULL)
-			gamepad_config_map[i] = 0;
-	  }
-	  if(!gamepad_config_map[10]) //KEY_MAP_MENU
-		gamepad_config_map[10] = 102; //KEY_MENU
-#else
-      for(i = 0; i < 16; i++)
-      {
-        gamepad_config_map[i] = file_options[7 + i] %
-         (BUTTON_ID_NONE + 1);
-
-        if(gamepad_config_map[i] == BUTTON_ID_MENU)
-        {
-          menu_button = i;
-        }
-      }
-
-      if(menu_button == -1)
-      {
-        gamepad_config_map[0] = BUTTON_ID_MENU;
-      }
-#endif
-#endif
-
-#if defined(NSPIRE_LIBRETRO)
-      if (words >= 24)
-        nspire_bios_choice = file_options[23] % 2;
-      else
-        nspire_bios_choice = 1;
-
-      if (words >= 28)
-      {
-        u32 r24 = file_options[24];
-        u32 r26 = file_options[26];
-        if ((r26 & GPSP_CFG_FS_V2_MARK) == GPSP_CFG_FS_V2_MARK)
-          current_frameskip_type = (frameskip_type)(r24 % 3);
-        else
-        {
-          static const frameskip_type om[] = {
-            no_frameskip, auto_frameskip, auto_frameskip, manual_frameskip
-          };
-          current_frameskip_type = om[r24 % 4];
-        }
-        frameskip_value = file_options[25];
-        if (frameskip_value > 99)
-          frameskip_value = 99;
-        if (frameskip_value < 1 && current_frameskip_type == auto_frameskip)
-          frameskip_value = 4;
-        random_skip = file_options[27] % 2;
-      }
-
-      if (words >= 31)
-      {
-        nspire_sprlim_choice = file_options[28] % 2;
-        nspire_rtc_choice = file_options[29] % 3;
-        nspire_frame_mix_choice = file_options[30] % 2;
-      }
-      if (words >= 32)
-        nspire_rom_buffer_size_choice = file_options[31];
-      else
-        nspire_rom_buffer_size_choice = 8;
-      if (words >= 33)
-        nspire_lcd_cache_clean_full = file_options[32] % 2;
-      else
-        nspire_lcd_cache_clean_full = 0;
-      if (words >= 34)
-        nspire_fps_overlay = file_options[33] % 2;
-      else
-        nspire_fps_overlay = 0;
-      if (words >= 35)
-        nspire_gba_blend_off = file_options[34] % 2;
-      else
-        nspire_gba_blend_off = 0;
-      if (words >= 36)
-        nspire_dynarec_ram_policy = file_options[35] % 2;
-      else
-        nspire_dynarec_ram_policy = 0;
-      if (words >= 37)
-        nspire_video_renderer_choice = file_options[36] % 2;
-      else
-        nspire_video_renderer_choice = 0;
-      nspire_clamp_rom_buffer_size();
-      nspire_emulator_options_apply();
-#endif
-
-      file_close(config_file);
-    }
-
-    return 0;
-  }
-
-  return -1;
-}
-
-s32 save_game_config_file()
-{
-  u8 game_config_filename[512];
-  u32 i;
-
-#ifdef NSPIRE_BUILD
-  change_ext(gamepak_filename, game_config_filename, ".cfg.tns");
-#else
-  change_ext(gamepak_filename, game_config_filename, ".cfg");
-#endif
-
-  file_open(game_config_file, game_config_filename, write);
-
-  if(file_check_valid(game_config_file))
-  {
-#if defined(NSPIRE_LIBRETRO)
-    u32 file_options[16];
-
-    file_options[0] = (u32)current_frameskip_type % 3;
-    file_options[1] = frameskip_value;
-    file_options[2] = random_skip;
-    file_options[3] = clock_speed;
-
-    for(i = 0; i < 10; i++)
-    {
-      file_options[4 + i] = cheats[i].cheat_active;
-    }
-
-    file_options[14] = quick_save_slot;
-    file_options[15] = GPSP_GAME_FS_V2_MARK;
-
-    file_write(game_config_file, file_options, sizeof(file_options));
-#else
-    u32 file_options[15];
-
-    file_options[0] = current_frameskip_type;
-    file_options[1] = frameskip_value;
-    file_options[2] = random_skip;
-    file_options[3] = clock_speed;
-
-    for(i = 0; i < 10; i++)
-    {
-      file_options[4 + i] = cheats[i].cheat_active;
-    }
-	
-	file_options[14] = quick_save_slot;
-	
-    file_write_array(game_config_file, file_options);
-#endif
-
-    file_close(game_config_file);
-
-    return 0;
-  }
-
-  return -1;
-}
-
-s32 save_config_file()
-{
-  u8 config_path[512];
-
-  #if (defined(PSP_BUILD) || defined(ARM_ARCH)) && !defined(_WIN32_WCE)
-    sprintf(config_path, "%s/%s", main_path, GPSP_CONFIG_FILENAME);
-  #else
-    sprintf(config_path, "%s\\%s", main_path, GPSP_CONFIG_FILENAME);
-  #endif
-
-  save_game_config_file();
-  
-  file_open(config_file, config_path, write);
-
-  if(file_check_valid(config_file))
-  {
-#if defined(NSPIRE_LIBRETRO)
-    u32 file_options[37];
-#else
-    u32 file_options[23];
-#endif
-    u32 i;
-
-    file_options[0] = screen_scale;
-    file_options[1] = screen_filter;
-    file_options[2] = global_enable_audio;
-    file_options[3] = audio_buffer_size_number;
-    file_options[4] = update_backup_flag;
-    file_options[5] = global_enable_analog;
-    file_options[6] = analog_sensitivity_level;
-
-#ifndef PC_BUILD
-    for(i = 0; i < 16; i++)
-    {
-      file_options[7 + i] = gamepad_config_map[i];
-    }
-#endif
-
-#if defined(NSPIRE_LIBRETRO)
-    nspire_clamp_rom_buffer_size();
-    file_options[23] = nspire_bios_choice % 2;
-    file_options[24] = (u32)current_frameskip_type % 3;
-    file_options[25] = frameskip_value;
-    file_options[26] = GPSP_CFG_FS_V2_MARK;
-    file_options[27] = random_skip % 2;
-    file_options[28] = nspire_sprlim_choice % 2;
-    file_options[29] = nspire_rtc_choice % 3;
-    file_options[30] = nspire_frame_mix_choice % 2;
-    file_options[31] = nspire_rom_buffer_size_choice;
-    file_options[32] = nspire_lcd_cache_clean_full % 2;
-    file_options[33] = nspire_fps_overlay % 2;
-    file_options[34] = nspire_gba_blend_off % 2;
-    file_options[35] = nspire_dynarec_ram_policy % 2;
-    file_options[36] = nspire_video_renderer_choice % 2;
-    file_write(config_file, file_options, 37 * sizeof(u32));
-#else
-    file_write_array(config_file, file_options);
-#endif
-
-    file_close(config_file);
-
-    return 0;
-  }
-
-  return -1;
-}
 #endif
 
 typedef enum
@@ -1542,49 +1099,6 @@ void get_savestate_snapshot(u8 *savestate_filename)
   else
     print_string("No savestate in this slot.          ", COLOR_HELP_TEXT,
      COLOR_BG, 10, 40);
-#else
-  static u16 snapshot_buffer[240 * 160];
-  u8 savestate_timestamp_string[80];
-
-  file_open(savestate_file, savestate_filename, read);
-
-  if(file_check_valid(savestate_file))
-  {
-    u8 weekday_strings[7][11] =
-    {
-      "Sunday", "Monday", "Tuesday", "Wednesday",
-      "Thursday", "Friday", "Saturday"
-    };
-    time_t savestate_time_flat;
-    struct tm *current_time;
-    file_read_array(savestate_file, snapshot_buffer);
-    file_read_variable(savestate_file, savestate_time_flat);
-
-    file_close(savestate_file);
-
-    current_time = localtime(&savestate_time_flat);
-    sprintf(savestate_timestamp_string,
-     "%s  %02d/%02d/%04d  %02d:%02d:%02d                ",
-     weekday_strings[current_time->tm_wday], current_time->tm_mon + 1,
-     current_time->tm_mday, current_time->tm_year + 1900,
-     current_time->tm_hour, current_time->tm_min, current_time->tm_sec);
-
-    savestate_timestamp_string[40] = 0;
-    print_string(savestate_timestamp_string, COLOR_HELP_TEXT, COLOR_BG,
-     10, 40);
-  }
-  else
-  {
-    memset(snapshot_buffer, 0, 240 * 160 * 2);
-    print_string_ext("No savestate exists for this slot.",
-     0xFFFF, 0x0000, 15, 75, snapshot_buffer, 240, 0, 0, FONT_HEIGHT);
-    print_string("---------- --/--/---- --:--:--          ", COLOR_HELP_TEXT,
-     COLOR_BG, 10, 40);
-  }
-
-#if !defined(GP2X_BUILD) && !defined(NSPIRE_BUILD)
-  blit_to_screen(snapshot_buffer, 240, 160, 230, 40);
-#endif
 #endif
 }
 
@@ -1609,11 +1123,80 @@ void get_savestate_filename_noshot(u32 slot, u8 *name_buffer)
 #endif
 }
 
-#ifdef PSP_BUILD
-  void _flush_cache()
+#if defined(NSPIRE_LIBRETRO)
+/* Interactive sub-menu to toggle an arbitrary combination of GBA controls
+ * (Up, Down, Left, Right, A, B, L, R, Start, Select) on a single swipe or
+ * calculator combo slot. */
+static void gui_edit_action_mask(const char *title, unsigned short *io_mask)
+{
+  int cursor = 0;
+  const int total_rows = NUM_GBA_ACTIONS + 2; /* 10 GBA buttons + Clear all + Done */
+  int i;
+
+  keys_wait_release();
+  for (;;)
   {
-    invalidate_all_cache();
+    gui_action_type act;
+    char header[64];
+    char summary[40];
+
+    clear_screen(COLOR_BG);
+    action_mask_name(*io_mask, summary, sizeof(summary));
+    snprintf(header, sizeof(header), "%s: %s", title, summary);
+    print_string_pad(header, COLOR_ACTIVE_ITEM, COLOR_BG, 10, 10, 50);
+    print_string_pad("Enter/Left/Right: toggle   Del: clear   Menu/Esc: done",
+                     COLOR_HELP_TEXT, COLOR_BG, 10, 22, 52);
+
+    for (i = 0; i < NUM_GBA_ACTIONS; i++)
+    {
+      char line[64];
+      int checked = ((*io_mask & (1u << i)) != 0);
+      u16 color = (cursor == i) ? COLOR_ACTIVE_ITEM : COLOR_INACTIVE_ITEM;
+      snprintf(line, sizeof(line), "%s [%c] %s",
+               (cursor == i) ? ">" : " ",
+               checked ? 'X' : ' ',
+               action_names[i]);
+      print_string_pad(line, color, COLOR_BG, 14, 40 + i * 12, 42);
+    }
+
+    print_string_pad(cursor == NUM_GBA_ACTIONS ? "> [Clear all controls]" : "  [Clear all controls]",
+                     cursor == NUM_GBA_ACTIONS ? COLOR_ACTIVE_ITEM : COLOR_INACTIVE_ITEM,
+                     COLOR_BG, 14, 40 + NUM_GBA_ACTIONS * 12 + 4, 42);
+    print_string_pad(cursor == NUM_GBA_ACTIONS + 1 ? "> [Done]" : "  [Done]",
+                     cursor == NUM_GBA_ACTIONS + 1 ? COLOR_ACTIVE_ITEM : COLOR_INACTIVE_ITEM,
+                     COLOR_BG, 14, 40 + (NUM_GBA_ACTIONS + 1) * 12 + 4, 42);
+
+    flip_screen();
+#ifdef NSPIRE_BUILD
+    update_at_vblank();
+#endif
+
+    act = get_gui_input();
+    if (act == CURSOR_UP)
+      cursor = (cursor - 1 + total_rows) % total_rows;
+    else if (act == CURSOR_DOWN)
+      cursor = (cursor + 1) % total_rows;
+    else if (act == CURSOR_SELECT || act == CURSOR_LEFT || act == CURSOR_RIGHT)
+    {
+      if (cursor < NUM_GBA_ACTIONS)
+        *io_mask ^= (unsigned short)(1u << cursor);
+      else if (cursor == NUM_GBA_ACTIONS)
+        *io_mask = 0;
+      else if (act == CURSOR_SELECT)
+        break;
+    }
+    else if (act == CURSOR_CLEAR)
+    {
+      if (cursor < NUM_GBA_ACTIONS)
+        *io_mask &= (unsigned short)~(1u << cursor);
+      else
+        *io_mask = 0;
+    }
+    else if (act == CURSOR_BACK || act == CURSOR_EXIT)
+      break;
   }
+  keys_wait_release();
+}
 #endif
 
 u32 menu(u16 *original_screen)
@@ -1645,11 +1228,15 @@ u32 menu(u16 *original_screen)
   u32 current_option_y = 0;
   char menu_status[80] = "";   /* what the last action did */
   u8 *settings_for_options[] = { "all games", "this game only" };
+  u8 *touchpad_swipe_options[] = { "off", "on" };
+  u8 *swipe_deadzone_options[] = { "3%", "5%", "8%", "10%", "12%", "15%", "20%" };
+  u8 *swipe_sensitivity_options[] = { "50%", "75%", "100%", "125%", "150%", "175%", "200%" };
+  u8 *swipe_diag_weight_options[] = { "equal H+V (100/100)", "weighted 4:3 angle" };
 
   void menu_reset_keys()
   {
     keys_set_defaults(key_bindings);
-    snprintf(menu_status, sizeof(menu_status), "Keys reset to gpSP's defaults.");
+    snprintf(menu_status, sizeof(menu_status), "Keys and combos reset to gpSP's defaults.");
   }
 
   menu_option_type gamepad_config_options[] =
@@ -1676,14 +1263,42 @@ u32 menu(u16 *original_screen)
     binding_option(ACTION_RESTART, 19),
     binding_option(ACTION_BRIGHTER, 20),
     binding_option(ACTION_DIMMER, 21),
+    swipe_multi_option(0, 22),
+    swipe_multi_option(1, 23),
+    swipe_multi_option(2, 24),
+    swipe_multi_option(3, 25),
+    combo_slot_option(0, 26),
+    combo_slot_option(1, 27),
+    combo_slot_option(2, 28),
+    combo_slot_option(3, 29),
+    combo_slot_option(4, 30),
+    combo_slot_option(5, 31),
+    combo_slot_option(6, 32),
+    combo_slot_option(7, 33),
+    string_selection_option(NULL, "Touchpad swipes", touchpad_swipe_options,
+     &nspire_touchpad_swipe, 2,
+     "On: use finger movement, not touch position.\n"
+     "Off: restore the old edge-arrow controls.", 34),
+    string_selection_option(NULL, "Swipe dead zone", swipe_deadzone_options,
+     &nspire_touchpad_deadzone, SWIPE_DEADZONE_CHOICES,
+     "Ignore movements below this percent.\n"
+     "X/Y are normalized for the 4:3 touchpad.", 35),
+    string_selection_option(NULL, "Swipe sensitivity", swipe_sensitivity_options,
+     &nspire_touchpad_sensitivity, SWIPE_SENSITIVITY_CHOICES,
+     "Higher values pick up smaller swipes.\n"
+     "X/Y act separately; diagonals split into H+V.", 36),
+    string_selection_option(NULL, "Diagonal split", swipe_diag_weight_options,
+     &nspire_touchpad_diagonal_weight, 2,
+     "Weighted 4:3 angle: splits diagonal swipes into\n"
+     "H and V inputs weighted by 4:3 pad travel.", 37),
     string_selection_option(nspire_config_keys_for_changed, "Keys for",
      settings_for_options, &nspire_keys_for, 2,
      "All games, or this game only: the game keeps its\n"
-     "own keys.", 23),
+     "own keys, swipe combos, and macro slots.", 38),
     action_option(menu_reset_keys, NULL, "Reset keys to defaults",
      "8 5 4 6, del A, var B, scratch L, doc R, shift\n"
-     "Start, ctrl Select, menu, F, L, S, Q, + and -.", 24),
-    submenu_option(NULL, "Back", "Return to the main menu.", 26)
+     "Start, ctrl Select, menu, F, L, S, Q, + and -.", 39),
+    submenu_option(NULL, "Back", "Return to the main menu.", 41)
   };
 
 
@@ -1780,53 +1395,6 @@ u32 menu(u16 *original_screen)
     {
       choose_menu(current_menu);
     }
-#else
-    save_game_config_file();
-#if defined(NSPIRE_LIBRETRO)
-    nspire_apply_bios();
-#endif
-    if(load_file(file_ext, load_filename) != -1)
-    {
-#if defined(NSPIRE_LIBRETRO)
-       if(load_gamepak(NULL, load_filename, nspire_rtc_force_value(), FEAT_AUTODETECT,
-                       SERIAL_MODE_AUTO) != 0)
-#else
-       if(load_gamepak(load_filename) == -1)
-#endif
-       {
-         quit();
-       }
-       reset_gba();
-#if defined(NSPIRE_LIBRETRO)
-       nspire_frameskip_reset();
-       nspire_load_cartridge_backup();
-#endif
-#ifdef NSPIRE_BUILD
-       //change_ext(gamepak_filename, load_filename, ".qsv.tns");
-       //load_state(load_filename);
-       //remove(load_filename);
-	   	if (quick_save_slot)
-		{
-			u8 current_savestate_filename[512];
-			get_savestate_filename_noshot(quick_save_slot - 1, current_savestate_filename);
-			if (load_state(current_savestate_filename))
-			  quick_save_slot = 0;
-		}
-#endif
-       return_value = 1;
-       repeat = 0;
-#if defined(NSPIRE_LIBRETRO)
-       instruction_count = 0;
-       reg[OAM_UPDATED] = 1;
-#else
-       reg[CHANGED_PC_STATUS] = 1;
-#endif
-       menu_update_clock();
-    }
-    else
-    {
-      choose_menu(current_menu);
-    }
 #endif
   }
 
@@ -1910,32 +1478,6 @@ u32 menu(u16 *original_screen)
   {
     nspire_rom_manager();
   }
-#else
-  void menu_save_state()
-  {
-    if(!first_load)
-    {
-      get_savestate_filename_noshot(savestate_slot,
-       current_savestate_filename);
-      save_state(current_savestate_filename, original_screen);
-    }
-    menu_change_state();
-  }
-
-  void menu_load_state()
-  {
-    if(!first_load)
-    {
-      if (load_state(current_savestate_filename))
-      {
-        return_value = 1;
-        repeat = 0;
-#if defined(NSPIRE_LIBRETRO)
-        nspire_frameskip_reset();
-#endif
-      }
-    }
-  }
 #endif
 
   void menu_load_state_file()
@@ -1965,12 +1507,6 @@ u32 menu(u16 *original_screen)
 
   void menu_fix_gamepad_help()
   {
-#if !defined(PC_BUILD) && !defined(NSPIRE_BUILD)
-    clear_help();
-    current_option->help_string =
-     gamepad_help[gamepad_config_map[
-     gamepad_config_line_to_button[current_option_num]]];
-#endif
   }
 
   void submenu_graphics_sound()
@@ -2069,62 +1605,13 @@ u32 menu(u16 *original_screen)
   u8 *off_on_options[] = { "off", "on" };
 #endif
 
-#ifndef PSP_BUILD
-  u8 *audio_buffer_options[] =
-  {
-    "16 bytes", "32 bytes", "64 bytes",
-    "128 bytes", "256 bytes", "512 bytes", "1024 bytes", "2048 bytes",
-    "4096 bytes", "8192 bytes", "16284 bytes"
-  };
-#else
-  u8 *audio_buffer_options[] =
-  {
-    "3072 bytes", "4096 bytes", "5120 bytes", "6144 bytes", "7168 bytes",
-    "8192 bytes", "9216 bytes", "10240 bytes", "11264 bytes", "12288 bytes"
-  };
-
-#endif
-
   u8 *update_backup_options[] = { "Exit only", "Automatic" };
 
-  u8 *gamepad_config_buttons[] =
-  {
-    "UP",
-    "DOWN",
-    "LEFT",
-    "RIGHT",
-    "A",
-    "B",
-    "L",
-    "R",
-    "START",
-    "SELECT",
-    "MENU",
-    "FASTFORWARD",
-    "LOAD STATE",
-    "SAVE STATE",
-    "RAPIDFIRE A",
-    "RAPIDFIRE B",
-    "RAPIDFIRE L",
-    "RAPIDFIRE R",
-    "VOLUME UP",
-    "VOLUME DOWN",
-    "DISPLAY FPS",
-    "NOTHING"
-  };
-
-  // Marker for help information, don't go past this mark (except \n)------*
   menu_option_type graphics_sound_options[] =
   {
     string_selection_option(NULL, "Display scaling", scale_options,
      (u32 *)(&screen_scale),
      sizeof(scale_options) / sizeof(scale_options[0]),
-#if !defined(GP2X_BUILD) && !defined(NSPIRE_BUILD)
-     "Determines how the GBA screen is resized in relation to the entire\n"
-     "screen. Select unscaled 3:2 for GBA resolution, scaled 3:2 for GBA\n"
-     "aspect ratio scaled to fill the height of the PSP screen, and\n"
-     "fullscreen to fill the entire PSP screen."
-#endif
 #if defined(NSPIRE_LIBRETRO)
      "Scaled/unblended is the sharp 320x214 picture.\n"
      "Blended ones are smoother and slower; unscaled is\n"
@@ -2137,14 +1624,6 @@ u32 menu(u16 *original_screen)
      "The backlight while gpSP runs (CX II); the\n"
      "calculator's own comes back when gpSP closes.\n"
      "In a game: + and - (Configure input).", 3),
-#endif
-#if !defined(GP2X_BUILD) && !defined(NSPIRE_BUILD)
-    string_selection_option(NULL, "Screen filtering", yes_no_options,
-     (u32 *)(&screen_filter), 2,
-     "Determines whether or not bilinear filtering should be used when\n"
-     "scaling the screen. Selecting this will produce a more even and\n"
-     "smooth image, at the cost of being blurry and having less vibrant\n"
-     "colors.", 3),
 #endif
 #if defined(NSPIRE_BUILD)
     string_selection_option(NULL, "Frameskip type", frameskip_options,
@@ -2180,58 +1659,6 @@ u32 menu(u16 *original_screen)
      "legacy old_video/video.c can be faster in some\n"
      "scenes (uses video_blend.S).", 11),
 #endif
-#elif !defined(GP2X_BUILD)
-    string_selection_option(NULL, "Frameskip type", frameskip_options,
-     (u32 *)(&current_frameskip_type), 3,
-#if !defined(NSPIRE_BUILD)
-     "Determines what kind of frameskipping to use.\n"
-     "Frameskipping may improve emulation speed of many games.\n"
-#endif
-     "Off: Do not skip any frames.\n"
-     "Auto: Skip up to N frames (see next opt) as needed.\n"
-     "Manual: Always render only 1 out of N + 1 frames."
-     , 5),
-    numeric_selection_option(NULL, "Frameskip value", &frameskip_value, 100,
-#if !defined(NSPIRE_BUILD)
-     "For auto frameskip, determines the maximum number of frames that\n"
-     "are allowed to be skipped consecutively.\n"
-     "For manual frameskip, determines the number of frames that will\n"
-     "always be skipped."
-#endif
-     "", 6),
-    string_selection_option(NULL, "Frameskip variation",
-     frameskip_variation_options, &random_skip, 2,
-#if !defined(NSPIRE_BUILD)
-     "If objects in the game flicker at a regular rate certain manual\n"
-     "frameskip values may cause them to normally disappear. Change this\n"
-     "value to 'random' to avoid this. Do not use otherwise, as it tends to\n"
-     "make the image quality worse, especially in high motion games."
-#endif
-     "", 7),
-#endif
-#ifndef NSPIRE_BUILD
-    string_selection_option(NULL, "Audio output", yes_no_options,
-     &global_enable_audio, 2,
-     "Select 'no' to turn off all audio output. This will\n"
-     "not result in a significant change in performance.", 9),
-#ifndef PSP_BUILD
-    string_selection_option(NULL, "Audio buffer", audio_buffer_options,
-             &audio_buffer_size_number, 11,
-#else
-    string_selection_option(NULL, "Audio buffer", audio_buffer_options,
-             &audio_buffer_size_number, 10,
-#endif
-
-#ifdef PSP_BUILD
-     "Set the size (in bytes) of the audio buffer. Larger values may result\n"
-     "in slightly better performance at the cost of latency; the lowest\n"
-     "value will give the most responsive audio.\n"
-     "This option requires gpSP to be restarted before it will take effect.",
-#else
-     "Set the size (in bytes) of the audio buffer.\n"
-     "This option requires gpSP restart to take effect.",
-#endif
-     10),
 #endif
 #if defined(NSPIRE_LIBRETRO)
     action_option(menu_speed_test, NULL, "Run speed test",
@@ -2282,45 +1709,6 @@ u32 menu(u16 *original_screen)
      "small. Off: as they are, for other emulators.\n"
      "Save manager (main menu) changes old ones.", 14),
     submenu_option(NULL, "Back", "Return to the main menu.", 15)
-  };
-#else
-  menu_option_type cheats_misc_options[] =
-  {
-    cheat_option(0),
-    cheat_option(1),
-    cheat_option(2),
-    cheat_option(3),
-    cheat_option(4),
-    cheat_option(5),
-    cheat_option(6),
-    cheat_option(7),
-    cheat_option(8),
-    cheat_option(9),
-#ifndef NSPIRE_BUILD
-    string_selection_option(NULL, "Clock speed",
-     clock_speed_options, &clock_speed_number,
-     sizeof(clock_speed_options) / sizeof(clock_speed_options[0]),
-     "Change the clock speed of the device. Higher clock\n"
-     "speed will yield better performance, but will drain\n"
-     "battery life further.", 11),
-#endif
-    string_selection_option(NULL, "Update backup",
-     update_backup_options, &update_backup_flag, 2,
-#ifdef GP2X_BUILD
-     "Determines when in-game save files should be\n"
-     "written back to SD card.",
-#elif defined(NSPIRE_BUILD)
-	 "Determines when in-game save files should be\n"
-	 "written back to internal storage memory.\n",
-#else
-     "Determines when in-game save files should be written back to\n"
-     "memstick. If set to 'automatic' writebacks will occur shortly after\n"
-     "the game's backup is altered. On 'exit only' it will only be written\n"
-     "back when you exit from this menu (NOT from using the home button).\n"
-     "Use the latter with extreme care.",
-#endif
-     12),
-    submenu_option(NULL, "Back", "Return to the main menu.", 14)
   };
 #endif
 
@@ -2411,92 +1799,6 @@ u32 menu(u16 *original_screen)
   make_menu(emulator, submenu_emulator, NULL);
 #endif
 
-#ifdef PSP_BUILD
-
-  menu_option_type gamepad_config_options[] =
-  {
-    gamepad_config_option("D-pad up     ", 0),
-    gamepad_config_option("D-pad down   ", 1),
-    gamepad_config_option("D-pad left   ", 2),
-    gamepad_config_option("D-pad right  ", 3),
-    gamepad_config_option("Circle       ", 4),
-    gamepad_config_option("Cross        ", 5),
-    gamepad_config_option("Square       ", 6),
-    gamepad_config_option("Triangle     ", 7),
-    gamepad_config_option("Left Trigger ", 8),
-    gamepad_config_option("Right Trigger", 9),
-    gamepad_config_option("Start        ", 10),
-    gamepad_config_option("Select       ", 11),
-    submenu_option(NULL, "Back", "Return to the main menu.", 13)
-  };
-
-
-  menu_option_type analog_config_options[] =
-  {
-    analog_config_option("Analog up   ", 0),
-    analog_config_option("Analog down ", 1),
-    analog_config_option("Analog left ", 2),
-    analog_config_option("Analog right", 3),
-    string_selection_option(NULL, "Enable analog", yes_no_options,
-     &global_enable_analog, 2,
-     "Select 'no' to block analog input entirely.", 7),
-    numeric_selection_option(NULL, "Analog sensitivity",
-     &analog_sensitivity_level, 10,
-     "Determine sensitivity/responsiveness of the analog input.\n"
-     "Lower numbers are less sensitive.", 8),
-    submenu_option(NULL, "Back", "Return to the main menu.", 11)
-  };
-
-#endif
-
-#ifdef GP2X_BUILD
-
-  menu_option_type gamepad_config_options[] =
-  {
-    gamepad_config_option("D-pad up     ", 0),
-    gamepad_config_option("D-pad down   ", 1),
-    gamepad_config_option("D-pad left   ", 2),
-    gamepad_config_option("D-pad right  ", 3),
-    gamepad_config_option("A            ", 4),
-    gamepad_config_option("B            ", 5),
-    gamepad_config_option("X            ", 6),
-    gamepad_config_option("Y            ", 7),
-    gamepad_config_option("Left Trigger ", 8),
-    gamepad_config_option("Right Trigger", 9),
-#ifdef WIZ_BUILD
-    gamepad_config_option("Menu         ", 10),
-#else
-    gamepad_config_option("Start        ", 10),
-#endif
-    gamepad_config_option("Select       ", 11),
-#ifndef WIZ_BUILD
-    gamepad_config_option("Stick Push   ", 12),
-#endif
-    submenu_option(NULL, "Back", "Return to the main menu.", 14)
-  };
-
-
-  menu_option_type analog_config_options[] =
-  {
-    submenu_option(NULL, "Back", "Return to the main menu.", 11)
-  };
-
-#endif
-
-#ifdef PC_BUILD
-
-  menu_option_type gamepad_config_options[] =
-  {
-    submenu_option(NULL, "Back", "Return to the main menu.", 13)
-  };
-
-  menu_option_type analog_config_options[] =
-  {
-    submenu_option(NULL, "Back", "Return to the main menu.", 11)
-  };
-
-#endif
-
   make_menu(gamepad_config, submenu_gamepad, NULL);
   make_menu(analog_config, submenu_analog, NULL);
 
@@ -2511,10 +1813,6 @@ u32 menu(u16 *original_screen)
      "Settings for all games or this one, BIOS, sprite\n"
      "limit, RTC, interframe blending, CPU speed.", 1),
 #endif
-#else
-    submenu_option(&graphics_sound_menu, "Graphics and Sound options",
-     "Select to set display parameters and frameskip\n"
-     "behavior, audio on/off, buffer size, and filtering.", 0),
 #endif
     numeric_selection_action_option(menu_load_state, NULL,
      "Load state from slot", &savestate_slot, MENU_SLOTS,
@@ -2530,19 +1828,9 @@ u32 menu(u16 *original_screen)
      "This game's in-game save and states, their sizes:\n"
      "compress, uncompress or delete them.", 5),
 #endif
-#if !defined(NSPIRE_BUILD)
-    submenu_option(&savestate_menu, "Savestate options",
-     "Select to enter a menu for loading, saving, and\n"
-     "viewing the currently active savestate for this game\n"
-     "(or to load a savestate file from another game)", 4),
-#endif
 	submenu_option(&gamepad_config_menu, "Configure input",
-     "Two keys for each GBA button and hotkey, or key\n"
-     "combinations; for all games or this one.", 6),
-#if !defined(GP2X_BUILD) && !defined(NSPIRE_BUILD)
-    submenu_option(&analog_config_menu, "Configure analog input",
-     "Select to change the in-game behavior of the PSP analog nub.", 7),
-#endif
+     "Two keys per button/hotkey, 4:3 weighted diagonal\n"
+     "swipes, and simultaneous multi-button combos.", 6),
     submenu_option(&cheats_misc_menu, "Cheats and Miscellaneous options",
      "Cheats, save state options (auto-increment, save\n"
      "when leaving, load on start), in-game saves,\n"
@@ -2569,9 +1857,6 @@ u32 menu(u16 *original_screen)
   make_menu(main, submenu_main, NULL);
 
 #if defined(NSPIRE_LIBRETRO)
-  /* The slot lines say what selecting them does: which slot a save goes to
-   * (a new one with auto-increment on) and whether the slot to load from
-   * holds a state. */
   void refresh_slot_lines()
   {
     static char load_line[64], save_line[64];
@@ -2616,10 +1901,6 @@ u32 menu(u16 *original_screen)
 
     clear_screen(COLOR_BG);
 
-#if !defined(GP2X_BUILD) && !defined(NSPIRE_BUILD)
-    blit_to_screen(original_screen, 240, 160, 230, 40);
-#endif
-
     current_menu = new_menu;
     current_option = new_menu->options;
     current_option_num = 0;
@@ -2641,32 +1922,6 @@ u32 menu(u16 *original_screen)
     const u32 max_cols = 50;
     u32 line_index = 0;
     const char *p = text ? text : "";
-
-#if defined(NSPIRE_HOST)
-    /* For the PC tests: the screen has room for 3 lines of 50 under the
-     * options, so a help text must fit them. */
-    {
-      const char *q;
-      u32 lines = 1, col = 0, too_wide = 0;
-      for (q = p; *q; q++)
-        if (*q == '\n')
-        {
-          lines++;
-          col = 0;
-        }
-        else if (++col > max_cols)
-          too_wide = 1;
-      if (q > p && q[-1] == '\n')
-        lines--;
-      if (too_wide || lines > 3)
-      {
-        fprintf(stderr, "gpsp-host: help text too long: ");
-        for (q = p; *q; q++)
-          fputc(*q == '\n' ? '|' : *q, stderr);
-        fputc('\n', stderr);
-      }
-    }
-#endif
 
     while (*p && line_index < max_lines)
     {
@@ -2718,26 +1973,11 @@ u32 menu(u16 *original_screen)
   }
 
 #if defined(NSPIRE_LIBRETRO)
-  /* The menu's options call the functions above through trampolines, code
-   * GCC wrote onto this frame of the stack as data on the way in. The menu
-   * opens from more than one stack depth, so they must reach memory and
-   * the instruction cache can't keep older ones. */
   nspire_sync_written_code();
 #endif
 
   menu_update_clock();
   video_resolution_large();
-
-#ifndef NSPIRE_BUILD
-#ifndef GP2X_BUILD
-  SDL_LockMutex(sound_mutex);
-#endif
-  SDL_PauseAudio(1);
-
-#ifndef GP2X_BUILD
-  SDL_UnlockMutex(sound_mutex);
-#endif
-#endif
 
   if(gamepak_filename[0] == 0)
   {
@@ -2761,8 +2001,6 @@ u32 menu(u16 *original_screen)
        cheats[i].cheat_name);
     }
   }
-
-  //current_menu->init_function();
 
   while(repeat)
   {
@@ -2810,6 +2048,32 @@ u32 menu(u16 *original_screen)
         snprintf((char *)line_buffer, sizeof(line_buffer), "%-17s %-11s%s%s%s",
          action_names[action], cell,
          picked && key_column == 1 ? "[" : " ", second, picked && key_column == 1 ? "]" : " ");
+      }
+      else if(display_option->option_type & SWIPE_MULTI_OPTION)
+      {
+        char mask_str[32];
+        u32 dir = display_option->num_options;
+        int picked = display_option == current_option;
+        action_mask_name(swipe_action_masks[dir], mask_str, sizeof(mask_str));
+        snprintf((char *)line_buffer, sizeof(line_buffer), "%-17s %s%s%s",
+         swipe_dir_names[dir],
+         picked ? "[" : " ", mask_str, picked ? "]" : " ");
+      }
+      else if(display_option->option_type & COMBO_SLOT_OPTION)
+      {
+        char trig_str[24], mask_str[28], label[20], cell[32];
+        u32 slot = display_option->num_options;
+        int picked = display_option == current_option;
+        snprintf(label, sizeof(label), "Combo %u", (unsigned)(slot + 1));
+        binding_name(combo_bindings[slot].trigger, trig_str, sizeof(trig_str));
+        action_mask_name(combo_bindings[slot].action_mask, mask_str, sizeof(mask_str));
+        snprintf(cell, sizeof(cell), "%s%s%s",
+         picked && key_column == 0 ? "[" : " ", trig_str,
+         picked && key_column == 0 ? "]" : " ");
+        snprintf((char *)line_buffer, sizeof(line_buffer), "%-17s %-11s%s%s%s",
+         label, cell,
+         picked && key_column == 1 ? "[" : " ", mask_str,
+         picked && key_column == 1 ? "]" : " ");
       }
       else
 #endif
@@ -2893,7 +2157,7 @@ u32 menu(u16 *original_screen)
       case CURSOR_RIGHT:
       case CURSOR_LEFT:
 #ifdef NSPIRE_BUILD
-        if(current_option->option_type & KEY_BINDING_OPTION)
+        if(current_option->option_type & (KEY_BINDING_OPTION | COMBO_SLOT_OPTION))
         {
           key_column ^= 1;
           break;
@@ -2933,12 +2197,39 @@ u32 menu(u16 *original_screen)
         if(current_option->option_type & KEY_BINDING_OPTION)
         {
           key_binding b;
-          print_string_pad("press a key (an arrow cancels)", COLOR_ACTIVE_ITEM,
-           COLOR_BG, 10 + 18 * FONT_WIDTH, current_option_y, 30);
+          print_string_pad("press a key or swipe (arrow cancels)", COLOR_ACTIVE_ITEM,
+           COLOR_BG, 10 + 18 * FONT_WIDTH, current_option_y, 36);
           flip_screen();
           b = key_capture();
           if(b.key)
             key_bindings[current_option->num_options][key_column] = b;
+          break;
+        }
+        if(current_option->option_type & SWIPE_MULTI_OPTION)
+        {
+          u32 dir = current_option->num_options;
+          gui_edit_action_mask(swipe_dir_names[dir], &swipe_action_masks[dir]);
+          break;
+        }
+        if(current_option->option_type & COMBO_SLOT_OPTION)
+        {
+          u32 slot = current_option->num_options;
+          if(key_column == 0)
+          {
+            key_binding b;
+            print_string_pad("press key or swipe (arrow cancels)", COLOR_ACTIVE_ITEM,
+             COLOR_BG, 10 + 18 * FONT_WIDTH, current_option_y, 34);
+            flip_screen();
+            b = key_capture();
+            if(b.key)
+              combo_bindings[slot].trigger = b;
+          }
+          else
+          {
+            char title[24];
+            snprintf(title, sizeof(title), "Combo %u controls", (unsigned)(slot + 1));
+            gui_edit_action_mask(title, &combo_bindings[slot].action_mask);
+          }
           break;
         }
 #endif
@@ -2955,6 +2246,23 @@ u32 menu(u16 *original_screen)
         {
           key_bindings[current_option->num_options][key_column].key = 0;
           key_bindings[current_option->num_options][key_column].with = 0;
+        }
+        else if(current_option->option_type & SWIPE_MULTI_OPTION)
+        {
+          swipe_action_masks[current_option->num_options] = 0;
+        }
+        else if(current_option->option_type & COMBO_SLOT_OPTION)
+        {
+          u32 slot = current_option->num_options;
+          if(key_column == 0)
+          {
+            combo_bindings[slot].trigger.key = 0;
+            combo_bindings[slot].trigger.with = 0;
+          }
+          else
+          {
+            combo_bindings[slot].action_mask = 0;
+          }
         }
         break;
 #endif

@@ -8,20 +8,27 @@ The GUI and host code come from legacy gpSP; the emulation core is libretro-gpsp
 
 ## Build
 
-Requires the [Ndless SDK](https://ndless.me/) (`nspire-gcc`, `nspire-g++`, `genzehn`).
+Requires a built [Ndless SDK](https://ndless.me/) with `nspire-gcc`, `nspire-g++`, `nspire-tools`, `genzehn`, `make-prg`, an ARM cross-compiler, and the SDK zlib headers/library.
 
-**Recommended (Docker):**
+First check that the SDK tools and zlib are installed:
 
 ```bash
-docker compose run --rm ndless-dev make
+make check-sdk
 ```
 
-Tag your Ndless SDK image as `ndless-dev:latest` (e.g. from [stepney141/ndless-docker](https://github.com/stepney141/ndless-docker)), or set `NSPIRE_BUILD_IMAGE`.
-
-**Host build:**
+**Recommended (Docker):** the Compose file mounts this project directory directly at `/work`. Use an Ndless SDK image tagged `ndless-dev:latest` (for example, one built from [stepney141/ndless-docker](https://github.com/stepney141/ndless-docker)), or set `NSPIRE_BUILD_IMAGE`.
 
 ```bash
-make
+docker compose run --rm ndless-dev make check-sdk
+docker compose run --rm ndless-dev sh -c 'make clean && make -j2'
+```
+
+**Host build** (with the same SDK tools available on `PATH`):
+
+```bash
+make check-sdk
+make clean
+make -j2
 ```
 
 Output: `gpsp_libretro.tns`. Copy it to the calculator as `_gpSP.tns`, in the
@@ -119,6 +126,19 @@ up to move it: up/down move it, **enter** puts it there, **esc** puts it back.
 The folder keeps that order (in `zgpSP_saves`); **shift+tab** sorts it
 A to Z again. A folder opens on its first game, and gpSP opens in the folder
 it was last in.
+
+**Touchpad swipes.** In **Configure input**, swipe mode tracks the movement
+from the start of a finger contact instead of treating a touch location as a
+direction. A rightward swipe activates `SW-RIGHT`; an upward swipe activates
+`SW-UP`. Diagonal movement activates its X and Y component inputs independently
+and also a dedicated diagonal input (`SW-UPLEFT`, `SW-UPRIGHT`, `SW-DNLEFT`, or
+`SW-DNRIGHT`). Each axis is normalized against the touchpad's own width or
+height, so the CX II's 4:3 touchpad is handled consistently. **Swipe dead zone**
+filters small movement, and **Swipe sensitivity** scales movement before the
+dead-zone threshold. Virtual swipe inputs may be paired with a physical
+calculator key. Reusing the same swipe or key in multiple GBA action rows makes
+one input activate multiple GBA buttons. Turning swipe mode off restores the
+older edge-arrow controls.
 
 **Save states.** Slots 0 to 999, named as before (`Game.gba12.svs.tns`, in
 `zgpSP_saves`), so older states still load. In *Cheats and Miscellaneous options*:

@@ -7,7 +7,32 @@
 
 #include <stdarg.h>
 
-static u32 old_key;
+/* Mutable hardware stubs let frontend unit tests feed realistic touch swipes
+ * and calculator-key combinations through the real nspire_input.c polling code. */
+static uint32_t unit_keypad[4];
+static touchpad_report_t unit_touchpad_report;
+static u32 unit_ticks;
+
+void unit_set_key(unsigned key, int down)
+{
+  unsigned bit;
+  if (!key || key > 128)
+    return;
+  bit = key - 1;
+  if (down)
+    unit_keypad[bit >> 5] |= 1u << (bit & 31);
+  else
+    unit_keypad[bit >> 5] &= ~(1u << (bit & 31));
+}
+
+void unit_set_touchpad(int contact, unsigned x, unsigned y)
+{
+  unit_touchpad_report.contact = contact ? 1 : 0;
+  unit_touchpad_report.x = (unsigned short)x;
+  unit_touchpad_report.y = (unsigned short)y;
+  unit_touchpad_report.arrow = TPAD_ARROW_NONE;
+  unit_touchpad_report.pressed = 0;
+}
 
 /* The calculator's registers: only the backlight is used here
  * (nspire_brightness.c); the tests look at what was written. */
@@ -16,7 +41,11 @@ long unit_backlight_writes;
 
 uint32_t host_hw_read(uint32_t reg)
 {
-  return reg == HW_BACKLIGHT ? unit_backlight : 0;
+  if (reg == HW_BACKLIGHT)
+    return unit_backlight;
+  if (reg >= HW_KEYPAD && reg < HW_KEYPAD + 16 && !(reg & 3))
+    return unit_keypad[(reg - HW_KEYPAD) >> 2];
+  return 0;
 }
 
 void host_hw_write(uint32_t reg, uint32_t value)
@@ -48,27 +77,33 @@ void nspire_osd_message(const char *format, ...)
   va_end(ap);
 }
 
-bool input_check_savestate(const u8 *src)
+
+/* Host-side substitutes for the Ndless touchpad and timer APIs. */
+touchpad_info_t *touchpad_getinfo(void)
 {
-  const u8 *p = bson_find_key(src, "input");
-  return (p && bson_contains_key(p, "prevkey", BSON_TYPE_INT32));
+  static touchpad_info_t info = { 320, 240 };
+  return &info;
 }
 
-bool input_read_savestate(const u8 *src)
+int touchpad_scan(touchpad_report_t *report)
 {
-  const u8 *p = bson_find_key(src, "input");
-  if (p)
-    return bson_read_int32(p, "prevkey", &old_key);
-  return false;
+  *report = unit_touchpad_report;
+  return 0;
 }
 
-unsigned input_write_savestate(u8 *dst)
+int on_key_pressed(void)
 {
-  u8 *wbptr1, *startp = dst;
-  bson_start_document(dst, "input", wbptr1);
-  bson_write_int32(dst, "prevkey", old_key);
-  bson_finish_document(dst, wbptr1);
-  return (unsigned int)(dst - startp);
+  return 0;
+}
+
+u32 nspire_ticks(void)
+{
+  return ++unit_ticks;
+}
+
+void nspire_wait_until(u32 tick)
+{
+  unit_ticks = tick;
 }
 
 void video_fill_u16_strip_arm(u16 *dst, u32 nh, u32 value)
@@ -90,6 +125,4 @@ u32 screen_filter;
 u32 current_frameskip_type;
 u32 frameskip_value = 4;
 u32 random_skip;
-u32 global_enable_analog;
-u32 analog_sensitivity_level = 4;
 char nspire_clock_crashed_rom[512];

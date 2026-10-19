@@ -29,7 +29,7 @@ CORE_OBJS := $(addprefix $(BUILD)/core_,$(addsuffix .o,$(CORE_C))) $(BUILD)/core
 
 # The unit tests: the parts that don't touch the calculator, and stubs.
 UNIT_FRONT := nspire_gbz nspire_stubs nspire_backup nspire_states nspire_turn nspire_keys nspire_config \
-              nspire_brightness nspire_game_list nspire_blend nspire_zip nspire_paths \
+              nspire_input nspire_brightness nspire_game_list nspire_blend nspire_zip nspire_paths \
               nspire_selfstore nspire_rom_convert
 UNIT_OBJS  := $(CORE_OBJS) $(BUILD)/core_video.o \
               $(addprefix $(BUILD)/front_,$(addsuffix .o,$(UNIT_FRONT))) $(BUILD)/test_host_stubs.o

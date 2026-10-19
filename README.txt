@@ -10,44 +10,46 @@ Output
 ------
   gpsp_libretro.tns   — install on the calculator like the legacy gpSP launcher.
 
-  Prerequisites
+Prerequisites
 -------------
-  The usual way to build is inside the Ndless SDK Docker image (see Build below),
-  which already provides nspire-gcc, nspire-g++, and genzehn on PATH.
-
-  Optional: install the Ndless SDK on the host instead and run make locally.
+  A complete, built Ndless SDK with these tools on PATH:
+    nspire-gcc, nspire-g++, nspire-tools, genzehn, make-prg
+  The ARM toolchain executables arm-none-eabi-gcc and arm-none-eabi-g++ must be
+  installed under the path returned by `nspire-tools _toolchainpath`. The SDK's
+  zlib third-party dependency must be built/installed so include/zlib.h and
+  lib/libz.a exist in the SDK root or $HOME/.ndless.
 
 Build
 -----
-  Recommended: Ndless SDK in Docker (docker-compose.yml in this directory).
+  Check prerequisites first:
+    make check-sdk
 
-  The compose file mounts the parent folder (gpsp-master) as /work and sets the
-  working directory to this project (/work/nspire-libretro-standalone). Tag your
-  Ndless SDK image as ndless-dev:latest (for example after building from
-  stepney141/ndless-docker), or set NSPIRE_BUILD_IMAGE to another tag.
+  Then do a clean build:
+    make clean
+    make -j2
 
-    cd nspire-libretro-standalone
-    docker compose run --rm ndless-dev make
+  The output is gpsp_libretro.tns. The target creates gpsp_libretro.elf, uses
+  genzehn to create gpsp_libretro.tns.zehn, and calls make-prg to produce the
+  final .tns file.
 
-  On Windows Docker Desktop the bind mount resolves the host path to the parent
-  of this folder automatically (the .. volume in compose).
+  Docker is also supported when you have an Ndless SDK image tagged
+  ndless-dev:latest (or set NSPIRE_BUILD_IMAGE):
+    docker compose run --rm ndless-dev make check-sdk
+    docker compose run --rm ndless-dev sh -c 'make clean && make -j2'
 
-  Manual equivalent without compose:
-
-    docker run --rm -v "/path/to/gpsp-master:/work" -w /work/nspire-libretro-standalone ndless-dev:latest make
-
-  Both produce gpsp_libretro.elf then gpsp_libretro.tns via genzehn.
-
-  Optional (inspect ARM926EJ-S assembly for video.cc):
-
-    docker compose run --rm ndless-dev make video-cc-asm
-
-  Writes video.cc.asm in this directory (no LTO so the listing is readable).
-
-  Alternative — host with Ndless SDK on PATH:
-
-    cd nspire-libretro-standalone
-    make
+Touchpad swipe controls
+-----------------------
+  Configure input includes Touchpad swipes, Swipe dead zone, and Swipe
+  sensitivity. Inputs are based on movement from the start of a finger contact,
+  not the location where the finger first touches. Swipe right triggers
+  SW-RIGHT and swipe up triggers SW-UP. Diagonal swipes activate X and Y
+  components separately and also expose SW-UPLEFT, SW-UPRIGHT, SW-DNLEFT, and
+  SW-DNRIGHT. The X and Y components are normalized against the reported
+  touchpad width and height, respecting the CX II's 4:3 ratio. The dead zone
+  filters small movement and sensitivity scales it before checking the zone.
+  You can map a swipe together with a physical calculator key, and reuse a
+  swipe or physical key in multiple GBA action rows to activate several GBA
+  buttons at once. Turn swipes off to restore the original edge-arrow controls.
 
 Ndless metadata (genzehn)
 -------------------------

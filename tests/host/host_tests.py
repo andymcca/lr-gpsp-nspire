@@ -1060,11 +1060,26 @@ wait 0.2
 press enter
 wait 0.3
 shot keys_top
-press up
-press up
-press up
-press up
-press up
+press down
+press down
+press down
+press down
+press down
+press down
+press down
+press down
+press down
+press down
+press down
+press down
+press down
+press down
+press down
+press down
+press down
+press down
+press down
+press down
 wait 0.3
 shot brighter
 press enter
@@ -1528,7 +1543,7 @@ def test_every_menu_line():
     lines = ["wait 1", "press enter", "wait 1.5", "press menu", "wait 0.3"]
     menus = (("graphics", 0, 11, [2, 3, 5, 6, 7, 8, 9, 10, 11, 13, 15]),
              ("emulator", 1, 9, [0, 2, 3, 4, 5, 6, 7, 9, 13]),
-             ("input", 5, 25, None),
+             ("input", 5, 28, None),
              ("cheats", 6, 16, list(range(10)) + [10, 11, 12, 13, 14, 15]))
     for name, index, count, _ in menus:
         lines += ["press down"] * index + ["press enter", "wait 0.3", "shot %s_00" % name]
