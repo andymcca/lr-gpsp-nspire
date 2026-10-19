@@ -1,7 +1,7 @@
 /* The CPU speed (nspire_clock.c): the "CPU speed" setting raises the clock
  * while a game runs; menus, the file browser and saving run at the
- * calculator's own speed. A CX II uses the list below. A CX uses
- * CX_CPU_SPEEDS (nspire_cx_clock.c). */
+ * calculator's own speed. Which list is shown follows the clock hardware,
+ * not Ndless's CX II flag: a CX keeps the clock word at 0x900B0000. */
 #ifndef NSPIRE_CLOCK_H
 #define NSPIRE_CLOCK_H
 
@@ -32,5 +32,11 @@ void nspire_clock_report(char *text, u32 size);
 unsigned nspire_cx_cpu_mhz(unsigned config);
 unsigned nspire_cx_ahb_mhz(unsigned config);
 unsigned nspire_cx_clock_word(unsigned original, unsigned target_mhz);
+/* 1: CX II clock (0x90140000). 0: CX clock. -1: the registers and the
+ * measurement don't say; the caller then uses Ndless's CX II flag.
+ * load is 0x900B0000, current is 0x900B0024. */
+int nspire_clock_kind_cx2(unsigned load, unsigned current, unsigned measured_mhz);
+/* Cached kind for this calculator. */
+int nspire_clock_is_cx2(void);
 
 #endif

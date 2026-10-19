@@ -213,7 +213,11 @@ it draws a second at normal speed, as in PocketSNES) or detailed (ms per frame r
 drawing, showing, idle; logged to `gpsp_perf.txt.tns`). *Run speed test* runs
 the game from where it is for 20 seconds (normal play, no speed limit with every
 frame drawn, no limit with nothing drawn) and writes `gpsp_results.txt.tns`.
-*CPU speed* in Emulator options follows the calculator. On a CX II: normal,
+*CPU speed* in Emulator options follows the clock, not Ndless's CX II flag
+(a CX can be reported as a CX II and still have the 132 MHz clock). The CX
+clock word is used when its load and latched values agree on a CX speed;
+otherwise a measured clock under 260 MHz is a CX and 260 MHz or more is a
+CX II. On a CX II: normal,
 or 408 to 504 MHz in 12 MHz steps while a game runs (PocketSNES's clock
 switch and list). Try 432 first: on the calculator this was made on, 456
 glitched now and then and 480 froze in PocketSNES. On a CX: normal, or 180,

@@ -79,3 +79,26 @@ unsigned nspire_cx_clock_word(unsigned original, unsigned target_mhz)
     return 0;
   return word;
 }
+
+/* A CX II on USB runs at 288 MHz and otherwise at 396. A CX, even raised,
+ * stays under that. */
+#define CX2_MIN_MHZ 260u
+
+int nspire_clock_kind_cx2(unsigned load, unsigned current, unsigned measured_mhz)
+{
+  unsigned decoded = nspire_cx_cpu_mhz(load);
+  int regs = load == current && decoded >= 96u && decoded <= 246u;
+  int near = measured_mhz && decoded &&
+             measured_mhz * 50u >= decoded * 49u &&
+             measured_mhz * 50u <= decoded * 51u;
+
+  /* Matching load and latched words are the CX power block. On a CX II
+   * 0x900B0000 is the ADC, so a fast measurement wins if they disagree. */
+  if (regs && (!measured_mhz || near))
+    return 0;
+  if (measured_mhz >= CX2_MIN_MHZ)
+    return 1;
+  if (measured_mhz)
+    return 0;
+  return -1;
+}

@@ -803,6 +803,16 @@ static void test_cx_clock(void)
   CHECK(nspire_cx_clock_word(stock | (1u << 8), 198) == 0, "a 48 MHz base is left alone");
   CHECK(nspire_cx_clock_word(stock, 240) == 0 && nspire_cx_clock_word(stock, 378) == 0,
         "240 and 378 MHz are not offered");
+  CHECK(nspire_clock_kind_cx2(stock, stock, 132) == 0,
+        "a CX clock stays a CX when Ndless says CX II");
+  CHECK(nspire_clock_kind_cx2(stock, stock, 0) == 0,
+        "a CX clock with no measurement stays a CX");
+  CHECK(nspire_clock_kind_cx2(stock, stock ^ 1u, 198) == 0,
+        "a measured CX speed stays a CX");
+  CHECK(nspire_clock_kind_cx2(stock, stock, 396) == 1,
+        "a 396 MHz measurement is a CX II");
+  CHECK(nspire_clock_kind_cx2(0, 0, 288) == 1, "288 MHz is a CX II");
+  CHECK(nspire_clock_kind_cx2(0, 0, 0) == -1, "nothing measured stays unknown");
 }
 
 int main(int argc, char **argv)

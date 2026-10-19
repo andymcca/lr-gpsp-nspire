@@ -51,6 +51,7 @@ void nspire_clock_check_crash(void) {}
 void nspire_clock_game(void) {}
 void nspire_clock_normal(void) {}
 void nspire_clock_left_game(void) {}
+int nspire_clock_is_cx2(void) { return 1; }
 
 u32 nspire_cpu_mhz(void)
 {

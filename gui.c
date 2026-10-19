@@ -2367,7 +2367,7 @@ u32 menu(u16 *original_screen)
     nspire_emulator_options_apply();
   }
 
-  if (!is_cx2 && nspire_cpu_speed >= CX_CPU_SPEEDS)
+  if (!nspire_clock_is_cx2() && nspire_cpu_speed >= CX_CPU_SPEEDS)
     nspire_cpu_speed = 0;
 
   menu_option_type emulator_options[] =
@@ -2406,10 +2406,10 @@ u32 menu(u16 *original_screen)
      "retranslated alone (faster). Classic: all of it\n"
      "is flushed, as in old gpSP (slower).", 7),
     selection_option(NULL,
-     is_cx2 ? "CPU speed (CX II): %s" : "CPU speed (CX): %s",
-     is_cx2 ? cpu_speed_options : cx_cpu_speed_options,
-     &nspire_cpu_speed, is_cx2 ? CPU_SPEEDS : CX_CPU_SPEEDS,
-     is_cx2 ?
+     nspire_clock_is_cx2() ? "CPU speed (CX II): %s" : "CPU speed (CX): %s",
+     nspire_clock_is_cx2() ? cpu_speed_options : cx_cpu_speed_options,
+     &nspire_cpu_speed, nspire_clock_is_cx2() ? CPU_SPEEDS : CX_CPU_SPEEDS,
+     nspire_clock_is_cx2() ?
       "Raised while a game runs; normal is 396 MHz (288\n"
       "on USB). Try 432 first: faster ones can freeze.\n"
       "A speed that froze goes back to normal next start." :
