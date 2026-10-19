@@ -1,134 +1,74 @@
-# Ndless Docker builds for `nspire-libretro-standalone`
+# Building gpSP for TI-Nspire with the Ndless SDK
 
-This document describes the **`ndless-dev`** Docker Compose service used to build **`gpsp_libretro.tns`** without installing the Ndless SDK on the host.
+This ZIP is intended to be extracted as one project folder. Its `docker-compose.yml`
+mounts that folder at `/work` and runs `make` from `/work`; it does not rely on a
+particular project directory name or a sibling checkout.
 
-**For assistants (Cursor, etc.):** read **§ This machine (current host)** first when rebuilding or debugging Docker; it records the resolved paths and versions on the maintainer’s Windows box so instructions stay consistent across sessions.
+## Prerequisites
 
----
+- Docker with Compose v2, or a native host with a complete Ndless SDK.
+- An SDK image tagged `ndless-dev:latest`, or set `NSPIRE_BUILD_IMAGE` to your image.
+- `nspire-gcc`, `nspire-g++`, `nspire-tools`, `genzehn`, `make-prg`, and the
+  SDK's ARM C/C++ compilers on `PATH`/in the SDK toolchain directory.
+- Ndless third-party zlib installed (`include/zlib.h` and `lib/libz.a`, either
+  in the SDK root or `$HOME/.ndless`).
 
-## This machine (current host)
+The uploaded Ndless source-only ZIP is not by itself a built SDK; build its
+cross-compiler and third-party libraries before compiling gpSP.
 
-Captured from the environment used for day-to-day builds. Re-run the commands in *Verification* if anything drifts (Docker upgrade, image rebuild, repo moved).
+## Clean build with Docker
 
-| Item | Value |
-|------|--------|
-| **OS** | Windows 10 / 11 (build 26200 family), **PowerShell** (avoid `&&` for chaining; use `Set-Location` then a new line or `;`). |
-| **Repo root** | `C:\Users\Owner\Downloads\nspire\gpsp-master` |
-| **Standalone project** | `C:\Users\Owner\Downloads\nspire\gpsp-master\nspire-libretro-standalone` |
-| **Compose project name** | `nspire-libretro-standalone` (directory name; see `docker compose config`) |
-| **Docker Engine** | `27.1.1` (build `6312585`) |
-| **Docker Compose** | `v2.29.1-desktop.1` (Docker Desktop bundle) |
-| **Build image (default)** | `ndless-dev:latest` — image ID at last check: `60908c305bec` (~3.98 GiB) |
-| **`NSPIRE_BUILD_IMAGE`** | Not set; no `.env` next to `docker-compose.yml` (Compose uses default `ndless-dev:latest`). |
-| **Resolved bind mount** | Host `C:\Users\Owner\Downloads\nspire\gpsp-master` → container `/work` |
-| **Container working dir** | `/work/nspire-libretro-standalone` |
-
-**Other images present locally (not used by default Compose):** `bensuperpc/ndless:latest` may also exist; the Makefile/compose path expects **`ndless-dev:latest`** unless you override `NSPIRE_BUILD_IMAGE`.
-
-### Copy-paste build (PowerShell)
-
-From anywhere:
-
-```powershell
-Set-Location "C:\Users\Owner\Downloads\nspire\gpsp-master\nspire-libretro-standalone"
-docker compose run --rm ndless-dev make -j2
-```
-
-Clean rebuild:
-
-```powershell
-Set-Location "C:\Users\Owner\Downloads\nspire\gpsp-master\nspire-libretro-standalone"
-docker compose run --rm ndless-dev make clean all
-```
-
-Outputs **`gpsp_libretro.elf`** and **`gpsp_libretro.tns`** on the host under the standalone directory (bind mount writes through to Windows).
-
-### Verification (refresh machine facts)
-
-```powershell
-Set-Location "C:\Users\Owner\Downloads\nspire\gpsp-master\nspire-libretro-standalone"
-docker --version
-docker compose version
-docker compose config
-docker images ndless-dev
-```
-
-`docker compose config` should show `source: C:\Users\Owner\Downloads\nspire\gpsp-master` and `target: /work`, `working_dir: /work/nspire-libretro-standalone`.
-
----
-
-## What it does (general)
-
-- Runs a container that provides the **Ndless cross-toolchain** (`nspire-gcc`, `nspire-g++`, `genzehn`, and related tools) on Linux.
-- **Mounts** the **parent** of `nspire-libretro-standalone` (the `gpsp-master` repo root) as **`/work`** inside the container.
-- Sets the container **working directory** to **`/work/nspire-libretro-standalone`**, so `make` runs in the same layout as a local build from that folder.
-
-The Compose file is [`docker-compose.yml`](./docker-compose.yml).
-
-## Prerequisites (any machine)
-
-1. **Docker** with Compose v2 (`docker compose` subcommand).
-2. A local image tagged **`ndless-dev:latest`** (default), **or** another image/tag via **`NSPIRE_BUILD_IMAGE`**.
-
-Community references for building the image include **[stepney141/ndless-docker](https://github.com/stepney141/ndless-docker)**. After building or pulling, tag for Compose:
+Run these commands from the extracted project root:
 
 ```bash
-docker tag <your-image-id-or-name> ndless-dev:latest
+docker compose run --rm ndless-dev make check-sdk
+docker compose run --rm ndless-dev sh -c 'make clean && make -j2'
 ```
 
-Override without retagging:
+For a native host with the SDK installed:
 
 ```bash
-export NSPIRE_BUILD_IMAGE=myregistry/ndless-sdk:2024   # bash
-docker compose run --rm ndless-dev make
+make check-sdk
+make clean
+make -j2
 ```
 
-On **Windows PowerShell**: `$env:NSPIRE_BUILD_IMAGE = "myregistry/ndless-sdk:2024"` before `docker compose`, or a `.env` file beside `docker-compose.yml`.
+The output is `gpsp_libretro.tns`. The build links the ARM executable
+`gpsp_libretro.elf`, runs `genzehn` to create `gpsp_libretro.tns.zehn` with the
+Ndless and touchpad metadata, and invokes `make-prg` to create the final `.tns`.
+The Makefile's `check-sdk` target reports missing compiler executables or zlib
+files before compiling objects. Avoid running `make -j clean all`; the clean and
+build goals can race. Use separate `make clean` and `make -j2` commands.
 
-## Typical commands (generic)
+## Target details
 
-From **`nspire-libretro-standalone`** (same directory as `docker-compose.yml`):
+The executable targets the ARM926EJ-S / ARMv5TE CPU in ARM mode with software
+floating point. It does not enable VFP/NEON. The Makefile uses header dependency
+files so a changed shared header triggers the relevant incremental rebuilds.
+The final `.tns` metadata currently sets the minimum Ndless version/revision in
+`ZEHNFLAGS`.
+
+## Touchpad swipe controls
+
+Configure input offers swipe enablement, dead zone and sensitivity settings.
+Swipe direction is derived from relative touch coordinates; X and Y are scaled
+against the touchpad's measured width and height so the CX II's 4:3 aspect ratio
+is respected. Diagonal movement raises two independent component inputs and a
+separate 8-way swipe input. A swipe or calculator key can be bound to multiple
+GBA action rows for multi-button input, and a swipe can be combined with a
+physical calculator key for a gated input.
+
+## Host validation
+
+The PC frontend suite needs only gcc/g++, zlib and Python:
 
 ```bash
-docker compose run --rm ndless-dev make -j2
-docker compose run --rm ndless-dev make clean all
-docker compose run --rm ndless-dev sh
+make -C tests/host clean
+make -C tests/host -j2 all
+mkdir -p /tmp/gpsp-frontend-tests
+tests/host/build/frontend_tests /tmp/gpsp-frontend-tests
 ```
 
-## Compose layout (summary)
-
-| Item | Value |
-|------|--------|
-| Service name | `ndless-dev` |
-| Image | `${NSPIRE_BUILD_IMAGE:-ndless-dev:latest}` |
-| Volume | `..:/work` (repo root → `/work`) |
-| Working dir | `/work/nspire-libretro-standalone` |
-
-Paths like **`../libretro-gpsp`** in the Makefile resolve inside the container as **`/work/libretro-gpsp`**.
-
-## Manual equivalent (without Compose)
-
-```bash
-docker run --rm \
-  -v "/absolute/path/to/gpsp-master:/work" \
-  -w /work/nspire-libretro-standalone \
-  ndless-dev:latest \
-  make -j2
-```
-
-## Ndless / genzehn metadata
-
-The Makefile passes **`genzehn`** flags such as **`--ndless-min 31`** and **`--ndless-rev-min 2001`**. See **`README.txt`** and **`Makefile`** (`ZEHNFLAGS`) to change them.
-
-## Troubleshooting
-
-| Symptom | Things to check |
-|--------|-------------------|
-| `image not found` / pull errors | Image **`ndless-dev:latest`** exists, or set **`NSPIRE_BUILD_IMAGE`**. |
-| Missing headers or `../libretro-gpsp` | Mount is the **repo root**; `gpsp-master` contains **`nspire-libretro-standalone`** and **`libretro-gpsp`**. |
-| Stale objects after branch switch | **`docker compose run --rm ndless-dev make clean all`**. |
-| Permission issues on Linux | Bind-mount UID (not typical on the current Windows host). |
-
-## Related docs
-
-- **[README.txt](./README.txt)** — host build, ROM/bios layout, RAM flags, short Docker note.
+This checks the shared input polling path, normalized swipe calculations,
+config persistence, and multi-button mappings. A successful host test is not a
+substitute for a target compiler build or a test on the physical calculator.
