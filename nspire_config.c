@@ -19,7 +19,7 @@
  *   63      screen brightness (0 the calculator's own, 1-10)
  *   64-65   the key bindings of actions 20-21 (brightness up, down)
  *   66      compress saves (1, the default) or not
- *   67      tear-free frames: 0 unset (CX off, CX II on), 1 off, 2 on
+ *   67      tear-free frames: 0 unset (off on the CX clock, on for a CX II), 1 off, 2 on
  *   68-71   0 (room for more)
  *
  * Files from older builds, and from the first QoL build ("QOL1", without
@@ -268,11 +268,11 @@ s32 nspire_config_load(void)
   nspire_gba_blend_off = words >= 35 ? o[34] % 2 : 0;
   nspire_dynarec_ram_policy = words >= 36 ? o[35] % 2 : 0;
   nspire_video_renderer_choice = words >= 37 ? o[36] % 2 : 0;
-  /* 0 in a file from before this setting: a CX II keeps the wait, a CX does not. */
+  /* 0 in a file from before this setting: follow the clock, not Ndless's flag. */
   if (words >= 68 && (o[67] == 1 || o[67] == 2))
     nspire_tear_free = o[67] == 2;
   else
-    nspire_tear_free = is_cx2 ? 1 : 0;
+    nspire_tear_free = nspire_clock_is_cx2() ? 1 : 0;
 
   if (words >= 63 && (o[37] == QOL_MAGIC || o[37] == QOL2_MAGIC || o[37] == QOL1_MAGIC))
   {
