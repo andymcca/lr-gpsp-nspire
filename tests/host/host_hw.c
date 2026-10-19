@@ -481,6 +481,12 @@ static int held(unsigned key)
 
 /* The arrows and the click are the touchpad's: gpSP masks them out of the
  * keypad registers and reads them here, as on a CX II. */
+touchpad_info_t *touchpad_getinfo(void)
+{
+  static touchpad_info_t info = { 320, 240 };
+  return &info;
+}
+
 int touchpad_scan(touchpad_report_t *report)
 {
   int up = held(113), right = held(115), down = held(117), left = held(119);

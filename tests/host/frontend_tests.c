@@ -217,6 +217,57 @@ static void test_turn_rects(void)
   }
 }
 
+static void test_touchpad(void)
+{
+  unsigned dirs = 0;
+  char text[32];
+
+  touchpad_swipe_directions(26, 0, 320, 240, 8, 100, &dirs);
+  CHECK(dirs == SWIPE_DIR_RIGHT, "swipe right %u", dirs);
+  touchpad_swipe_directions(0, 20, 320, 240, 8, 100, &dirs);
+  CHECK(dirs == SWIPE_DIR_UP, "swipe up %u", dirs);
+  touchpad_swipe_directions(-26, 20, 320, 240, 8, 100, &dirs);
+  CHECK(dirs == (SWIPE_DIR_LEFT | SWIPE_DIR_UP), "diagonal held %u", dirs);
+  touchpad_swipe_directions(10, 5, 320, 240, 8, 100, &dirs);
+  CHECK(dirs == 0, "inside the dead zone %u", dirs);
+  touchpad_swipe_directions(13, 0, 320, 240, 8, 200, &dirs);
+  CHECK(dirs == SWIPE_DIR_RIGHT, "sensitivity %u", dirs);
+
+  CHECK(nspire_touchpad_swipe == 0, "arrows by default");
+  keys_set_defaults(key_bindings);
+  CHECK(key_bindings[ACTION_UP][1].key == 0 && swipe_action_masks[0] == 0, "no swipe until asked");
+  keys_add_swipe_defaults_if_free(key_bindings);
+  CHECK(key_bindings[ACTION_UP][1].key == KEY_SWIPE_UP, "SW-UP in the free slot");
+  CHECK(!strcmp(key_name(KEY_SWIPE_UP), "SW-UP"), "swipe name");
+  CHECK(key_is_bindable(KEY_SWIPE_RIGHT), "a swipe can be bound");
+  action_mask_name((1u << ACTION_A) | (1u << ACTION_B), text, sizeof(text));
+  CHECK(!strcmp(text, "A+B"), "mask %s", text);
+
+  nspire_touchpad_swipe = 1;
+  nspire_touchpad_deadzone = 4;
+  nspire_touchpad_sensitivity = 6;
+  swipe_action_masks[0] = (unsigned short)(1u << ACTION_A);
+  combo_bindings[0].trigger = binding_unpack(KEY_DEL);
+  combo_bindings[0].action_mask = (unsigned short)(1u << ACTION_B);
+  CHECK(nspire_config_save() == 0, "save touchpad settings");
+  nspire_touchpad_swipe = 0;
+  nspire_touchpad_deadzone = 2;
+  nspire_touchpad_sensitivity = 2;
+  swipe_action_masks[0] = 0;
+  combo_bindings[0].trigger.key = 0;
+  combo_bindings[0].action_mask = 0;
+  CHECK(nspire_config_load() == 0, "load touchpad settings");
+  CHECK(nspire_touchpad_swipe == 1 && nspire_touchpad_deadzone == 4 &&
+        nspire_touchpad_sensitivity == 6, "touchpad values");
+  CHECK(swipe_action_masks[0] == (1u << ACTION_A), "swipe list");
+  CHECK(combo_bindings[0].trigger.key == KEY_DEL &&
+        combo_bindings[0].action_mask == (1u << ACTION_B), "combo");
+
+  nspire_touchpad_swipe = 0;
+  keys_set_defaults(key_bindings);
+  nspire_config_save();
+}
+
 static void test_keys(void)
 {
   char text[32];
@@ -289,7 +340,7 @@ static void test_config(void)
   nspire_cpu_speed = 2;
   nspire_rom_buffer_size_choice = 12;
   CHECK(nspire_config_save() == 0, "save");
-  CHECK(file_size(path) == 288, "gpsp_qol.cfg.tns is %ld bytes", file_size(path));
+  CHECK(file_size(path) == 328, "gpsp_qol.cfg.tns is %ld bytes", file_size(path));
   CHECK(file_size(old_path) < 0, "older builds' gpsp.cfg.tns left alone");
 
   keys_set_defaults(key_bindings);
@@ -355,7 +406,7 @@ static void test_config(void)
    * aren't in it, so whatever was set stays (main() starts from defaults).
    * Saving writes this build's own file and leaves the old one alone. */
   CHECK(nspire_config_save() == 0, "save after the old file");
-  CHECK(file_size(path) == 288 && file_size(old_path) == 148, "files %ld %ld", file_size(path),
+  CHECK(file_size(path) == 328 && file_size(old_path) == 148, "files %ld %ld", file_size(path),
         file_size(old_path));
 
   /* A game's own settings. */
@@ -492,7 +543,7 @@ static void test_config_versions(void)
   write_words(path, o, 72);
   nspire_config_load();
   CHECK(nspire_cpu_speed == 5, "456 MHz is speed %u now", nspire_cpu_speed);
-  CHECK(nspire_config_save() == 0 && file_size(path) == 288, "saved as this build's");
+  CHECK(nspire_config_save() == 0 && file_size(path) == 328, "saved as this build's");
   f = fopen(path, "rb");
   CHECK(f && fread(o, 4, 72, f) == 72, "read back");
   if (f)
@@ -555,14 +606,14 @@ static void test_settings_in_program(void)
   CHECK(nspire_config_save() == 0, "save");
   stored = file_size(program);
   CHECK(stored == bare + SELFSTORE_SIZE + 16, "the program file grew by its settings area: %ld", stored);
-  CHECK(selfstore_read(program, data, sizeof(data)) == 288, "288 bytes stored in it");
+  CHECK(selfstore_read(program, data, sizeof(data)) == 328, "328 bytes stored in it");
   f = fopen(program, "rb");
   for (i = 0; f && i < 5000 && fgetc(f) == (i & 0xFF); i++)
     ;
   if (f)
     fclose(f);
   CHECK(i == 5000, "the program's own bytes untouched (%d)", i);
-  CHECK(file_size(copy) == 288, "and the copy in the saves folder");
+  CHECK(file_size(copy) == 328, "and the copy in the saves folder");
 
   /* From the program file first. */
   remove(copy);
@@ -796,6 +847,7 @@ int main(int argc, char **argv)
   test_turn_rects();
   printf("key bindings\n");
   test_keys();
+  test_touchpad();
   printf("settings files\n");
   test_config();
   test_config_versions();

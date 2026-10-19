@@ -50,6 +50,7 @@ LDFLAGS := -O3 -flto $(ARM926FLAGS)
 LDLIBS  := -lz -lm
 
 ZEHNFLAGS := --version 12 --author "gpSP libretro port" --clickpad-support=false \
+             --touchpad-support=true \
              --color-support=true --240x320-support=true --compress --ndless-min 31 --ndless-rev-min 2001
 
 VPATH := $(CORE_DIR):$(ARM_VPATH):$(COMM_DIR)/compat:$(COMM_DIR)/encodings:\
