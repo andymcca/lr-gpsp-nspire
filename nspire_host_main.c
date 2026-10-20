@@ -859,7 +859,9 @@ int main(int argc, char *argv[])
   keys_set_defaults(key_bindings);
   /* Settings found elsewhere (the saves folder's copy, an older build's
    * file) go into the program file now, not at the next save. */
-  if (load_config_file() == 0 && !nspire_config_in_program())
+  if (load_config_file() != 0)
+    nspire_tear_free = nspire_clock_is_cx2() ? 1 : 0;
+  else if (!nspire_config_in_program())
     save_config_file();
 #if defined(NSPIRE_LIBRETRO)
   nspire_sync_bios_menu_from_disk();

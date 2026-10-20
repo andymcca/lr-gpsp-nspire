@@ -24,4 +24,13 @@ u32 nspire_cpu_mhz(void);
 /* The clock register and the last switch, for the speed test's file. */
 void nspire_clock_report(char *text, u32 size);
 
+/* 1 when this calculator has the CX II clock. Ndless's flag is only a
+ * fallback: it is true for model id 0x202, and a CX can still read as that
+ * while its clock stays at 0x900B0000. */
+int nspire_clock_is_cx2(void);
+/* 1: CX II. 0: CX. -1: load (0x900B0000), current (0x900B0024) and the
+ * measurement don't say. */
+int nspire_clock_kind_cx2(unsigned load, unsigned current, unsigned measured_mhz);
+unsigned nspire_cx_cpu_mhz(unsigned config);
+
 #endif

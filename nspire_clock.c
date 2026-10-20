@@ -25,6 +25,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#define CX_CLOCK_LOAD   (*(volatile u32 *)0x900B0000)
+#define CX_CLOCK_ACTIVE (*(volatile u32 *)0x900B0024)
 #define CLOCK_CONTROL  (*(volatile u32 *)0x90140030)
 #define PMU_COMMAND    (*(volatile u32 *)0x90140020)   /* only read here */
 #define MEMC_STATE     (*(volatile u32 *)0x90120004)   /* bit 10: normal memory sleeps */
@@ -228,12 +230,47 @@ static u32 clock_now_mhz(void)
   return clock_mhz ? clock_mhz : (u32)CLOCK_MULTIPLIER(CLOCK_CONTROL) * 12;
 }
 
+/* Ndless's CX II flag is only a fallback. A matching CX clock word decides
+ * immediately, including before the timer exists. A measurement, once the
+ * timer is up, decides the rest. */
+static int clock_kind = -1;
+
+static int clock_kind_now(int measure)
+{
+  int kind;
+  u32 mhz = 0;
+
+  if (clock_kind >= 0)
+    return clock_kind;
+  if (is_classic)
+  {
+    clock_kind = 0;
+    return 0;
+  }
+  if (measure)
+    mhz = measure_mhz(QUICK_LOOPS);
+  kind = nspire_clock_kind_cx2(CX_CLOCK_LOAD, CX_CLOCK_ACTIVE, mhz);
+  if (kind < 0)
+  {
+    if (!measure)
+      return is_cx2 ? 1 : 0;
+    kind = is_cx2 ? 1 : 0;
+  }
+  clock_kind = kind;
+  return clock_kind;
+}
+
+int nspire_clock_is_cx2(void)
+{
+  return clock_kind_now(0);
+}
+
 /* 0 puts back the calculator's own speed. Returns the clock in MHz. */
 static u32 set_multiplier(int multiplier)
 {
   u32 value;
 
-  if (!is_cx2 || multiplier < 0 || multiplier > 63)
+  if (!nspire_clock_is_cx2() || multiplier < 0 || multiplier > 63)
     return 0;
   if (!multiplier)
   {
@@ -261,6 +298,10 @@ static void marker_path(char *path, u32 size)
 void nspire_clock_check_crash(void)
 {
   char path[600], line[600];
+
+  /* After nspire_init the timer can time the CPU, so a clock word that
+   * didn't already decide is settled here. */
+  clock_kind_now(1);
   FILE *f;
 
   marker_path(path, sizeof(path));
@@ -290,7 +331,7 @@ void nspire_clock_game(void)
     nspire_osd_message("A raised CPU speed froze it last time: back to normal");
     shown_multiplier = 0;
   }
-  if (!is_cx2)
+  if (!nspire_clock_is_cx2())
     return;
   if (multiplier != failed_multiplier)
     failed_multiplier = 0;
@@ -352,9 +393,11 @@ void nspire_clock_report(char *text, u32 size)
 {
   u32 len;
 
-  if (!is_cx2)
+  if (!nspire_clock_is_cx2())
   {
-    snprintf(text, size, "clock register: not a CX II");
+    u32 reg = CX_CLOCK_LOAD;
+    snprintf(text, size, "clock register %08lx (CX %u MHz)",
+             (unsigned long)reg, nspire_cx_cpu_mhz(reg));
     return;
   }
   snprintf(text, size, "clock register %08lx (x%d)", (unsigned long)CLOCK_CONTROL,
