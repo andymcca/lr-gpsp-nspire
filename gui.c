@@ -48,6 +48,7 @@
 #include "nspire_states.h"
 #include "nspire_clock.h"
 #include "nspire_brightness.h"
+#include <os.h>
 #include "nspire_game_list.h"
 #endif
 
@@ -2066,6 +2067,7 @@ u32 menu(u16 *original_screen)
    "8", "9", "10 (brightest)" };
   u8 *cpu_speed_options[] = { "normal", "408 MHz", "420 MHz", "432 MHz", "444 MHz", "456 MHz",
    "468 MHz", "480 MHz", "492 MHz", "504 MHz" };
+  u8 *cx_cpu_speed_options[] = { "normal", "180 MHz", "198 MHz", "210 MHz", "222 MHz", "234 MHz" };
   u8 *off_on_options[] = { "off", "on" };
 #endif
 
@@ -2234,6 +2236,11 @@ u32 menu(u16 *original_screen)
      10),
 #endif
 #if defined(NSPIRE_LIBRETRO)
+    string_selection_option(NULL, "Tear-free frames",
+     off_on_options, &nspire_tear_free, 2,
+     "On: three screen buffers, and gpSP waits until\n"
+     "the panel is done with a frame (no tearing).\n"
+     "Off is faster. A CX starts on off.", 12),
     action_option(menu_speed_test, NULL, "Run speed test",
      "Runs the game from here for 20 seconds, three\n"
      "ways, and shows where the time goes; then it's\n"
@@ -2365,6 +2372,9 @@ u32 menu(u16 *original_screen)
     nspire_emulator_options_apply();
   }
 
+  if (!nspire_clock_is_cx2() && nspire_cpu_speed >= CX_CPU_SPEEDS)
+    nspire_cpu_speed = 0;
+
   menu_option_type emulator_options[] =
   {
     string_selection_option(nspire_config_settings_for_changed, "Settings for",
@@ -2400,11 +2410,18 @@ u32 menu(u16 *original_screen)
      "Partial SMC: code a game rewrites in RAM is\n"
      "retranslated alone (faster). Classic: all of it\n"
      "is flushed, as in old gpSP (slower).", 7),
-    string_selection_option(NULL, "CPU speed (CX II)", cpu_speed_options,
-     &nspire_cpu_speed, CPU_SPEEDS,
-     "Raised while a game runs; normal is 396 MHz (288\n"
-     "on USB). Try 432 first: faster ones can freeze.\n"
-     "A speed that froze goes back to normal next start.", 9),
+    selection_option(NULL,
+     nspire_clock_is_cx2() ? "CPU speed (CX II): %s" : "CPU speed (CX): %s",
+     nspire_clock_is_cx2() ? cpu_speed_options : cx_cpu_speed_options,
+     &nspire_cpu_speed, nspire_clock_is_cx2() ? CPU_SPEEDS : CX_CPU_SPEEDS,
+     nspire_clock_is_cx2() ?
+      "Raised while a game runs; normal is 396 MHz (288\n"
+      "on USB). Try 432 first: faster ones can freeze.\n"
+      "A speed that froze goes back to normal next start." :
+      "Raised while a game runs. Normal is this\n"
+      "calculator's 132 MHz. Try 198 first: 234 can\n"
+      "freeze it. A freeze goes back to normal.",
+     9, STRING_SELECTION_OPTION),
     submenu_option(NULL, "Back", "Return to the main menu.", 13)
   };
 

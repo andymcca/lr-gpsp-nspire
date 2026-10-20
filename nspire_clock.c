@@ -1,4 +1,5 @@
-/* The CX II's CPU speed, taken from PocketSNES for the Nspire.
+/* CPU speed. A CX II follows PocketSNES (below). A CX writes its own clock
+ * word (nspire_cx_clock.c) and never the CX II multipliers.
  *
  * The power controller (0x90140000) holds the clock multiplier of the 12 MHz
  * base clock in bits 24-29 of 0x90140030 (the OS sets 33, 396 MHz, or 24,
@@ -24,6 +25,11 @@
 
 #include <stdio.h>
 #include <string.h>
+
+/* CX (not CX II): the load word, then 4 latches it. nOver does the same. */
+#define CX_CLOCK_LOAD   (*(volatile u32 *)0x900B0000)
+#define CX_CLOCK_APPLY  (*(volatile u32 *)0x900B000C)
+#define CX_CLOCK_ACTIVE (*(volatile u32 *)0x900B0024)
 
 #define CLOCK_CONTROL  (*(volatile u32 *)0x90140030)
 #define PMU_COMMAND    (*(volatile u32 *)0x90140020)   /* only read here */
@@ -59,6 +65,7 @@ char nspire_clock_crashed_rom[512];
 static int crashed;               /* a raised speed froze the calculator last time */
 
 static u32 os_clock_control;      /* the OS's setting, put back after a raised one */
+static u32 cx_saved_clock;         /* the CX word, put back after a raised one */
 static int clock_raised;
 static u32 clock_mhz;             /* measured after the last switch, 0 if none */
 static int failed_multiplier;     /* a raise that didn't happen isn't tried again */
@@ -108,6 +115,11 @@ static int clock_matches(u32 mhz, int multiplier)
 {
   u32 want = (u32)multiplier * 12;
   return mhz * 50 >= want * 49 && mhz * 50 <= want * 51;
+}
+
+static int mhz_close(u32 mhz, unsigned want)
+{
+  return want && mhz * 50 >= want * 49 && mhz * 50 <= want * 51;
 }
 
 static void sync_code(void)
@@ -228,12 +240,95 @@ static u32 clock_now_mhz(void)
   return clock_mhz ? clock_mhz : (u32)CLOCK_MULTIPLIER(CLOCK_CONTROL) * 12;
 }
 
+/* Writes a CX clock word and waits about a millisecond, as nOver does, so
+ * the OS can take the power interrupt. Returns the measured clock. */
+static u32 switch_cx_clock(u32 value)
+{
+  u32 cpsr = interrupts_off();
+  u32 start, mhz;
+
+  last_switch.before = CX_CLOCK_LOAD;
+  last_switch.target = value;
+  last_switch.result = last_switch.ticks = 0;
+  last_switch.refused = NULL;
+  CX_CLOCK_LOAD = value;
+  CX_CLOCK_APPLY = 4;
+  interrupts_restore(cpsr);
+  start = nspire_ticks();
+  {
+    u32 spins = 0;
+    while ((u32)(nspire_ticks() - start) < NSPIRE_TICK_HZ / 1000 && spins < 4000000)
+      spins++;
+  }
+  mhz = measure_mhz(QUICK_LOOPS);
+  last_switch.after = CX_CLOCK_LOAD;
+  last_switch.mhz = mhz;
+  last_switch.ticks = nspire_ticks() - start;
+  return mhz;
+}
+
+/* 1 when this calculator has the CX II clock. Ndless's flag is only a
+ * fallback: it is true for model id 0x202, and a CX can still read as that
+ * while its clock stays at 0x900B0000. */
+int nspire_clock_is_cx2(void)
+{
+  static int decided = -1;
+  u32 measured;
+  int kind;
+
+  if (decided >= 0)
+    return decided;
+  if (is_classic)
+  {
+    decided = 0;
+    return 0;
+  }
+  measured = measure_mhz(QUICK_LOOPS);
+  kind = nspire_clock_kind_cx2(CX_CLOCK_LOAD, CX_CLOCK_ACTIVE, measured);
+  if (kind < 0)
+    return is_cx2 ? 1 : 0;
+  decided = kind;
+  return decided;
+}
+
+/* 0 puts back the calculator's own speed. mhz is 180 to 234. */
+static u32 set_cx_mhz(unsigned mhz)
+{
+  u32 word;
+
+  if (nspire_clock_is_cx2() || is_classic)
+    return 0;
+  if (!mhz)
+  {
+    if (clock_raised)
+    {
+      clock_raised = 0;
+      clock_mhz = switch_cx_clock(cx_saved_clock);
+    }
+    return clock_mhz ? clock_mhz : nspire_cx_cpu_mhz(CX_CLOCK_LOAD);
+  }
+  if (!clock_raised)
+    cx_saved_clock = CX_CLOCK_LOAD;
+  word = nspire_cx_clock_word(cx_saved_clock, mhz);
+  if (!word)
+  {
+    last_switch.refused = "CX clock register in an unknown mode";
+    last_switch.before = CX_CLOCK_LOAD;
+    last_switch.target = mhz;
+    return clock_mhz ? clock_mhz : nspire_cx_cpu_mhz(CX_CLOCK_LOAD);
+  }
+  if (!clock_raised || CX_CLOCK_LOAD != word)
+    clock_mhz = switch_cx_clock(word);
+  clock_raised = 1;
+  return clock_mhz ? clock_mhz : nspire_cx_cpu_mhz(CX_CLOCK_LOAD);
+}
+
 /* 0 puts back the calculator's own speed. Returns the clock in MHz. */
 static u32 set_multiplier(int multiplier)
 {
   u32 value;
 
-  if (!is_cx2 || multiplier < 0 || multiplier > 63)
+  if (!nspire_clock_is_cx2() || multiplier < 0 || multiplier > 63)
     return 0;
   if (!multiplier)
   {
@@ -281,8 +376,11 @@ void nspire_clock_check_crash(void)
 
 void nspire_clock_game(void)
 {
-  int multiplier = nspire_cpu_speed < CPU_SPEEDS ? multipliers[nspire_cpu_speed] : 0;
+  static const unsigned cx_mhz[CX_CPU_SPEEDS] = { 0, 180, 198, 210, 222, 234 };
+  int cx2 = nspire_clock_is_cx2();
+  int target;
   u32 mhz;
+  int reached;
 
   if (crashed)
   {
@@ -290,50 +388,58 @@ void nspire_clock_game(void)
     nspire_osd_message("A raised CPU speed froze it last time: back to normal");
     shown_multiplier = 0;
   }
-  if (!is_cx2)
+  if (!cx2 && is_classic)
     return;
-  if (multiplier != failed_multiplier)
+  if (!cx2 && nspire_cpu_speed >= CX_CPU_SPEEDS)
+    nspire_cpu_speed = 0;
+  target = cx2 ? (nspire_cpu_speed < CPU_SPEEDS ? multipliers[nspire_cpu_speed] : 0)
+               : (int)cx_mhz[nspire_cpu_speed];
+  if (target != failed_multiplier)
     failed_multiplier = 0;
-  if (multiplier && multiplier == failed_multiplier)
-    multiplier = 0;
+  if (target && target == failed_multiplier)
+    target = 0;
 
-  if (multiplier && !marker_written)
+  if (target && !marker_written)
   {
     char path[600];
     FILE *f;
     marker_path(path, sizeof(path));
     f = fopen(path, "w");
     if (!f)
-      multiplier = 0;   /* no marker, no raised speed */
+      target = 0;   /* no marker, no raised speed */
     else
     {
-      fprintf(f, "%d\n%s\n", multiplier, gamepak_filename);
+      fprintf(f, "%d\n%s\n", target, gamepak_filename);
       fclose(f);
       marker_written = 1;
     }
   }
 
-  mhz = set_multiplier(multiplier);
-  if (multiplier && mhz && !clock_matches(mhz, multiplier))
+  mhz = cx2 ? set_multiplier(target) : set_cx_mhz((unsigned)target);
+  reached = cx2 ? clock_matches(mhz, target) : mhz_close(mhz, (unsigned)target);
+  if (target && mhz && !reached)
   {
     /* The clock didn't get there: back to normal, and say so. */
-    failed_multiplier = multiplier;
-    mhz = set_multiplier(0);
+    failed_multiplier = target;
+    mhz = cx2 ? set_multiplier(0) : set_cx_mhz(0);
     nspire_osd_message("CPU speed not raised (still %u MHz)", (unsigned)mhz);
   }
-  else if (multiplier != shown_multiplier && (multiplier || shown_multiplier > 0) && mhz)
-    nspire_osd_message(multiplier ? "CPU %u MHz" : "CPU %u MHz (normal)", (unsigned)mhz);
-  shown_multiplier = multiplier;
+  else if (target != shown_multiplier && (target || shown_multiplier > 0) && mhz)
+    nspire_osd_message(target ? "CPU %u MHz" : "CPU %u MHz (normal)", (unsigned)mhz);
+  shown_multiplier = target;
 }
 
 void nspire_clock_normal(void)
 {
-  set_multiplier(0);
+  if (nspire_clock_is_cx2())
+    set_multiplier(0);
+  else if (!is_classic)
+    set_cx_mhz(0);
 }
 
 void nspire_clock_left_game(void)
 {
-  set_multiplier(0);
+  nspire_clock_normal();
   if (marker_written)
   {
     char path[600];
@@ -352,9 +458,26 @@ void nspire_clock_report(char *text, u32 size)
 {
   u32 len;
 
-  if (!is_cx2)
+  if (is_classic)
   {
-    snprintf(text, size, "clock register: not a CX II");
+    snprintf(text, size, "clock register: not a CX");
+    return;
+  }
+  if (!nspire_clock_is_cx2())
+  {
+    u32 reg = CX_CLOCK_LOAD;
+    snprintf(text, size, "clock register %08lx (CX %u MHz, bus %u MHz)",
+             (unsigned long)reg, nspire_cx_cpu_mhz(reg), nspire_cx_ahb_mhz(reg));
+    if (!last_switch.target)
+      return;
+    len = (u32)strlen(text);
+    if (last_switch.refused)
+      snprintf(text + len, size - len, "; last switch not tried: %s, %lu MHz",
+               last_switch.refused, (unsigned long)last_switch.mhz);
+    else
+      snprintf(text + len, size - len, "; last switch %08lx -> %08lx, register %08lx, %lu MHz",
+               (unsigned long)last_switch.before, (unsigned long)last_switch.target,
+               (unsigned long)last_switch.after, (unsigned long)last_switch.mhz);
     return;
   }
   snprintf(text, size, "clock register %08lx (x%d)", (unsigned long)CLOCK_CONTROL,

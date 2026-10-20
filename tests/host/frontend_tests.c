@@ -305,6 +305,13 @@ static void test_config(void)
         "graphics settings %u %u %u", screen_scale, current_frameskip_type, frameskip_value);
   CHECK(nspire_fps_overlay == 2 && !nspire_auto_increment && !nspire_save_on_exit && nspire_load_on_start &&
         nspire_cpu_speed == 2 && nspire_rom_buffer_size_choice == 12, "the new settings");
+  CHECK(nspire_tear_free == 1, "tear-free stayed on");
+  nspire_tear_free = 0;
+  CHECK(nspire_config_save() == 0, "save tear-free off");
+  nspire_tear_free = 1;
+  CHECK(nspire_config_load() == 0 && nspire_tear_free == 0, "tear-free off reloads");
+  nspire_tear_free = 1;
+  CHECK(nspire_config_save() == 0, "tear-free back on");
   CHECK(key_bindings[ACTION_A][0].key == KEY_DEL && key_bindings[ACTION_A][1].key == KEY_7, "A's keys");
   CHECK(key_bindings[ACTION_SAVE_STATE][1].key == KEY_S && key_bindings[ACTION_SAVE_STATE][1].with == KEY_SHIFT,
         "combo kept");
@@ -779,6 +786,42 @@ static void test_game_list(void)
   CHECK(file_size(order_path) < 0, "sorting A to Z forgets it");
 }
 
+static void test_cx_clock(void)
+{
+  unsigned stock = (1u << 1) | (1u << 12) | (44u << 15) | (2u << 21);
+  unsigned extra = stock | 1u | (1u << 23);
+  unsigned word;
+
+  CHECK(nspire_cx_cpu_mhz(stock) == 132, "stock CX is %u MHz", nspire_cx_cpu_mhz(stock));
+  CHECK(nspire_cx_ahb_mhz(stock) == 66, "stock bus is %u MHz", nspire_cx_ahb_mhz(stock));
+  word = nspire_cx_clock_word(extra, 198);
+  CHECK(nspire_cx_cpu_mhz(word) == 198 && nspire_cx_ahb_mhz(word) == 66,
+        "198 MHz, bus %u", nspire_cx_ahb_mhz(word));
+  CHECK((word & (1u | (1u << 23))) == (1u | (1u << 23)), "untouched clock bits stay");
+  word = nspire_cx_clock_word(stock, 180);
+  CHECK(nspire_cx_cpu_mhz(word) == 180 && nspire_cx_ahb_mhz(word) <= 66, "180 MHz");
+  word = nspire_cx_clock_word(stock, 210);
+  CHECK(nspire_cx_cpu_mhz(word) == 210 && nspire_cx_ahb_mhz(word) <= 66, "210 MHz");
+  word = nspire_cx_clock_word(stock, 222);
+  CHECK(nspire_cx_cpu_mhz(word) == 222 && nspire_cx_ahb_mhz(word) <= 66, "222 MHz");
+  word = nspire_cx_clock_word(stock, 234);
+  CHECK(nspire_cx_cpu_mhz(word) == 234 && nspire_cx_ahb_mhz(word) == 58,
+        "234 MHz bus %u", nspire_cx_ahb_mhz(word));
+  CHECK(nspire_cx_clock_word(stock | (1u << 8), 198) == 0, "a 48 MHz base is left alone");
+  CHECK(nspire_cx_clock_word(stock, 240) == 0 && nspire_cx_clock_word(stock, 378) == 0,
+        "240 and 378 MHz are not offered");
+  CHECK(nspire_clock_kind_cx2(stock, stock, 132) == 0,
+        "a CX clock stays a CX when Ndless says CX II");
+  CHECK(nspire_clock_kind_cx2(stock, stock, 0) == 0,
+        "a CX clock with no measurement stays a CX");
+  CHECK(nspire_clock_kind_cx2(stock, stock ^ 1u, 198) == 0,
+        "a measured CX speed stays a CX");
+  CHECK(nspire_clock_kind_cx2(stock, stock, 396) == 1,
+        "a 396 MHz measurement is a CX II");
+  CHECK(nspire_clock_kind_cx2(0, 0, 288) == 1, "288 MHz is a CX II");
+  CHECK(nspire_clock_kind_cx2(0, 0, 0) == -1, "nothing measured stays unknown");
+}
+
 int main(int argc, char **argv)
 {
   if (argc < 2)
@@ -805,6 +848,8 @@ int main(int argc, char **argv)
   test_slot_keys();
   printf("brightness\n");
   test_brightness();
+  printf("CX clock\n");
+  test_cx_clock();
   printf("file list order\n");
   test_game_list();
   printf("%d checks, %d failed\n", checks, failures);

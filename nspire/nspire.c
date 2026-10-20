@@ -158,12 +158,15 @@ void set_display_buffer(void* buffer)
 
 #if defined(NSPIRE_LIBRETRO)
 extern u32 nspire_lcd_cache_clean_full;
+extern u32 nspire_tear_free;
 #endif
 
 /* Shows the frame drawn into nspire_screen and moves nspire_screen on to the
- * next buffer. The LCD controller takes a new address at its next refresh, so
- * it always shows whole frames; and it never reads the buffer drawn into
- * next, unless frames come faster than it refreshes, which is waited out. */
+ * next buffer. The LCD controller takes a new address at its next refresh.
+ * With tear-free frames on, gpSP also waits until the panel is no longer
+ * reading the buffer about to be drawn into (at most 1/25 s). That wait is
+ * what keeps a fast frame from being scanned mid-draw; on a CX it can run
+ * out the whole 1/25 s, so the menu defaults it off there. */
 void nspire_flip(void)
 {
 	uintptr_t start, end;
@@ -178,6 +181,9 @@ void nspire_flip(void)
 	nspire_displayed_screen = nspire_screen;
 	drawing_screen = (drawing_screen + 1) % SCREENS;
 	nspire_screen = screens[drawing_screen];
+
+	if (!nspire_tear_free)
+		return;
 
 	start = (uintptr_t)nspire_screen;
 	end = start + sizeof(screens[0]);

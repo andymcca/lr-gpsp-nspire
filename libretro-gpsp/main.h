@@ -109,6 +109,9 @@ extern u32 nspire_sprlim_choice;
 extern u32 nspire_rtc_choice;
 extern u32 nspire_frame_mix_choice;
 extern u32 nspire_lcd_cache_clean_full;
+/* 0 = swap the screen buffers and keep drawing. 1 = also wait until the
+ * panel has left the buffer about to be drawn (no tearing; can stall a CX). */
+extern u32 nspire_tear_free;
 extern u32 nspire_fps_overlay;
 /* 1 = skip BLDCNT alpha / fade / semi-transparent combine in video.cc (faster). */
 extern u32 nspire_gba_blend_off;

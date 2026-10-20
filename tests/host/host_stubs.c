@@ -93,3 +93,4 @@ u32 random_skip;
 u32 global_enable_analog;
 u32 analog_sensitivity_level = 4;
 char nspire_clock_crashed_rom[512];
+int nspire_clock_is_cx2(void) { return 1; }

@@ -1,12 +1,15 @@
-/* The CX II's CPU speed (nspire_clock.c): the "CPU speed" setting raises the
- * clock while a game runs; menus, the file browser and saving run at the
- * calculator's own speed. */
+/* The CPU speed (nspire_clock.c): the "CPU speed" setting raises the clock
+ * while a game runs; menus, the file browser and saving run at the
+ * calculator's own speed. Which list is shown follows the clock hardware,
+ * not Ndless's CX II flag: a CX keeps the clock word at 0x900B0000. */
 #ifndef NSPIRE_CLOCK_H
 #define NSPIRE_CLOCK_H
 
-/* nspire_cpu_speed: 0 normal, then 408 to 504 MHz in 12 MHz steps (the
- * multiplier of the 12 MHz clock, 34 to 42), as in PocketSNES. */
+/* nspire_cpu_speed on a CX II: 0 normal, then 408 to 504 MHz in 12 MHz steps
+ * (the multiplier of the 12 MHz clock, 34 to 42), as in PocketSNES. */
 #define CPU_SPEEDS 10
+/* nspire_cpu_speed on a CX: 0 normal, then 180, 198, 210, 222, 234 MHz. */
+#define CX_CPU_SPEEDS 6
 
 /* At startup: if a raised speed froze the calculator last time (its marker
  * file is still there), the speed goes back to normal and the next game
@@ -23,5 +26,17 @@ void nspire_clock_left_game(void);
 u32 nspire_cpu_mhz(void);
 /* The clock register and the last switch, for the speed test's file. */
 void nspire_clock_report(char *text, u32 size);
+
+/* The CX clock word (0x900B0000). nspire_cx_clock_word returns 0 when
+ * target_mhz cannot be made from that register. */
+unsigned nspire_cx_cpu_mhz(unsigned config);
+unsigned nspire_cx_ahb_mhz(unsigned config);
+unsigned nspire_cx_clock_word(unsigned original, unsigned target_mhz);
+/* 1: CX II clock (0x90140000). 0: CX clock. -1: the registers and the
+ * measurement don't say; the caller then uses Ndless's CX II flag.
+ * load is 0x900B0000, current is 0x900B0024. */
+int nspire_clock_kind_cx2(unsigned load, unsigned current, unsigned measured_mhz);
+/* Cached kind for this calculator. */
+int nspire_clock_is_cx2(void);
 
 #endif

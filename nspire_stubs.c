@@ -19,6 +19,8 @@ u32 nspire_rtc_choice = 0;
 u32 nspire_frame_mix_choice = 0;
 /* 0 = range D-clean of LCD buffer; 1 = full clean_dcache before display swap. */
 u32 nspire_lcd_cache_clean_full = 0;
+/* Replaced from the settings file. 1 matches a CX II until that load. */
+u32 nspire_tear_free = 1;
 /* 1 = draw FPS overlay on presented game frames. */
 u32 nspire_fps_overlay = 0;
 /* 1 = skip PPU BLDCNT blending / brightness passes (performance; inaccurate). */
