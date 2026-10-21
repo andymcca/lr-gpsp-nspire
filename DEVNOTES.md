@@ -337,6 +337,7 @@ PC only (not seen on the calculator yet):
   Advance Wars): qemu-arm and the PC tests only.
 * The new look (2026-10-20): every screen, state pictures, tab between the
   settings pages; its costs are the ARM926 model's.
+* Faster saves and loads (2026-10-20): level 1, no flush, one write.
 
 
 History
@@ -429,12 +430,37 @@ real Emerald frame and state), nothing of it while a game runs:
 | a settings page | 6.4 |
 | the game list | 11 |
 | a state's picture made and packed, at each save | 26.5 |
-| (the state itself packed, at each save, as before) | 255 |
+| (the state itself packed, at each save: see "Saves and loads") | 132 |
 | a state's picture unpacked and scaled (list, managers) | 7 |
 
 The first version took 48 ms to open the menu and 58 ms more per save:
 `ui_scale` divided per pixel (the CPU has no divide) and the picture was
 packed at level 6. The program grew from 468 KB to 560 KB (the font).
+
+Saves and loads (2026-10-20)
+----------------------------
+
+The owner: saves and loads "take too long". A save was, on the CPU (ARM926
+model, the Emerald state): copying the state 6 ms, packing it at zlib level
+6 254 ms, the picture 26.5 ms, and a dynarec flush gpSP's old save_state had
+(copied into states_save), which costs the game ~30 ms of translating again
+afterwards (`perf flush=N`: a 39 ms frame, then a little more). Then the
+files: a temporary file, removing the old one, renaming.
+
+Now: no flush (the state doesn't hold translations or RAM's code tags,
+`&iwram[0x8000]` and `ewram`'s first half; loading flushes; libretro's
+serialize, used every frame for rewind, never flushes); zlib level 1 (132
+ms, the file 49 KB instead of 44; level 3: 153 ms, 47 KB; Z_RLE: 111 ms, 81
+KB); the file made in memory and written with one fwrite, straight to its
+name when the slot is new (the temporary file only guards a state being
+replaced). About 165 ms of CPU a save instead of ~317. Loads read the
+whole file at once and unpack it in memory (31 ms).
+
+What the calculator's file system costs isn't known: every save and load
+records its parts (copy, pack, picture, write, replace; read, unpack,
+apply) and gpSP writes the last 40 to `zgpSP_saves/gpsp_states_time.txt.tns`
+when it closes. If writing dominates, smaller files matter more than
+packing speed; if packing does, LZ4 would be about 4x faster than zlib 1.
 
 Open items and ideas
 --------------------

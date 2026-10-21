@@ -750,7 +750,7 @@ wait 1
     for name in os.listdir(first.save("")):
         if name.startswith("gpsp_order"):
             shutil.copy(first.save(name), r.file("gpsp_order.txt.tns"))
-        elif name != "gpsp_romdir.tns":
+        elif name not in ("gpsp_romdir.tns", "gpsp_states_time.txt.tns"):   # not from older builds
             shutil.copy(first.save(name), r.file(name))
     shutil.copy(r.file("Bravo.gba0.svs.tns"), os.path.join(r.gba, "More", "Inner.gba4.svs.tns"))
     for name, text in (("gpsp.cfg.tns", "older build"), ("Game.gbc.sav.tns", "other emulator"),

@@ -325,6 +325,7 @@ void quit(void)
   nspire_clock_normal();
   nspire_clock_left_game();
   nspire_perf_log_flush();
+  states_timing_flush();
   save_romdir();
   update_backup_force();
   memory_term();

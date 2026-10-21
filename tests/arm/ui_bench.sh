@@ -7,11 +7,12 @@
 # STATE defaults to the Emerald state in $GBA_GAMES. Needs the Ndless
 # toolchain and the plugin-enabled qemu-arm (QEMU=), as tests/calc_speed.sh.
 set -eu
+FRAME=${1:-none}
+[ "$FRAME" = none ] || FRAME=$(realpath "$FRAME")
 cd "$(dirname "$0")"
 command -v nspire-gcc >/dev/null || . ~/nspire/build/env.sh
 GBA_GAMES=${GBA_GAMES:-$HOME/nspire/build/testroms/gba/games}
 export QEMU=${QEMU:-$HOME/nspire/build/tools/qemu-plugins/qemu-10.2.1/build/qemu-arm}
-FRAME=${1:-none}
 STATE=${2:-$GBA_GAMES/emerald_route_grass.svs.tns}
 make -s build/ui_bench >/dev/null
 python3 -I - "$FRAME" "$STATE" <<'PY'
@@ -21,14 +22,15 @@ import calc_speed
 plugin = calc_speed.build()
 syms = {n: a for a, _, n in calc_speed.symbols('build/ui_bench')}
 out = 'build/ui_bench.model'
-args = [a for a in sys.argv[1:] if a == 'none' or os.path.exists(a)]
+frame, state = sys.argv[1:]
+args = [frame if os.path.exists(frame) else 'none'] + ([state] if os.path.exists(state) else [])
 subprocess.run([os.environ['QEMU'], '-cpu', 'arm926', '-plugin',
                 '%s,mark=%x,out=%s' % (plugin, syms['perf_frame_mark'], out), 'build/ui_bench'] + args,
                check=True)
 steps = ['the menu opens (the backdrop, the paused picture)', 'the main menu, drawn and turned',
          'a settings page, drawn and turned', 'the game list, drawn and turned',
          "a state's picture, made and packed (each save)", "a state's picture, unpacked and scaled",
-         None, 'for comparison: the state itself packed (each save)']
+         None, 'the state itself packed (each save)']
 # the first mark only starts the count
 frames = [int(l.split()[1]) for l in open(out) if l.startswith('frame')][1:]
 for name, cycles in zip(steps, frames):

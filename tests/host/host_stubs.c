@@ -78,6 +78,7 @@ void video_fill_u16_strip_arm(u16 *dst, u32 nh, u32 value)
 }
 
 void nspire_fps_overlay_reset(void) {}
+u32 nspire_ticks(void) { return 0; }
 void nspire_video_mix_reset(void) {}
 
 /* nspire_host_main.c */

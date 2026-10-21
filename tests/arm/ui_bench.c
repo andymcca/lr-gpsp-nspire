@@ -10,8 +10,8 @@
  *   4  the game list, the same
  *   5  saving a state: its picture made and packed (zlib, as the state)
  *   6  the game list's details: a state's picture unpacked and scaled
- *   7  for comparison, what saving a state cost before: packing the state
- *      (zlib level 6, nspire_states.c), when one is given
+ *   7  packing the state itself (zlib level 1, as nspire_states.c), when
+ *      one is given
  *
  * tests/arm/ui_bench.sh builds it, runs it under the model and prints the
  * milliseconds.
@@ -167,7 +167,7 @@ int main(int argc, char **argv)
     if (n > 32 && !memcmp(file, "GPSZ", 4) && uncompress(raw, &raw_len, file + 32, n - 32) == Z_OK)
     {
       perf_frame_mark();
-      compress2(out, &out_len, raw, raw_len, 6);
+      compress2(out, &out_len, raw, raw_len, 1);   /* STATE_LEVEL */
       perf_frame_mark();
       printf("state: %lu bytes packed into %lu\n", (unsigned long)raw_len, (unsigned long)out_len);
     }

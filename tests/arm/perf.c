@@ -17,7 +17,9 @@
  * the last one, so a change that should draw the same can be checked with
  * the same run;
  * ppm=DIR also writes the screen as shown at those frames (DIR/sNNNNN.ppm,
- * turned back to landscape); dump=DIR writes the dynarec's code at the end.
+ * turned back to landscape); dump=DIR writes the dynarec's code at the end;
+ * flush=N empties the dynarec's caches at the start of frame N (as loading
+ * a state does), to see what translating everything again costs.
  */
 
 #include "common.h"
@@ -202,7 +204,7 @@ static int setting(int argc, char **argv, const char *name, int value)
 
 int main(int argc, char **argv)
 {
-  int frames, frame, draw_every, hash_every;
+  int frames, frame, draw_every, hash_every, flush_at;
   const char *ppm_dir;
 
   if (argc < 7)
@@ -221,6 +223,7 @@ int main(int argc, char **argv)
   sprite_limit = nspire_sprlim_choice ? 0 : 1;
   ppm_dir = text_setting(argc, argv, "ppm");
   hash_every = setting(argc, argv, "every", 50);
+  flush_at = setting(argc, argv, "flush", 0);
   nspire_batch_lines = setting(argc, argv, "batch", 1);
   if (!read_keys(argv[5]))
   {
@@ -260,6 +263,8 @@ int main(int argc, char **argv)
   for (frame = 1; frame <= frames; frame++)
   {
     perf_frame_mark();
+    if (frame == flush_at)
+      flush_dynarec_caches();
     skip_next_frame = draw_every == 0 || (frame % draw_every) != 0;
     if (!skip_next_frame)
       nspire_video_frame_start();

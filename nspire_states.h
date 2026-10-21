@@ -80,6 +80,10 @@ int nspire_backup_info(long *bytes, int *compressed);
 int nspire_backup_set_compressed(int compressed);
 int nspire_backup_delete(void);
 
+/* How long the last saves and loads took, by part, to
+ * gpsp_states_time.txt.tns in the saves folder (when gpSP closes). */
+void states_timing_flush(void);
+
 /* The game's state in memory, for the speed test: states_snapshot returns a
  * buffer (free() it) or NULL; states_restore puts it back. */
 void *states_snapshot(void);
