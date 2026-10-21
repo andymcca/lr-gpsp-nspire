@@ -4,6 +4,8 @@
 #   frontend_tests  frame turning, key bindings, the settings files
 #   gpsp-host       all of gpSP's frontend (menus, file list, game loop) on a
 #                   simulated calculator (host_hw.c), driven by scripts
+#   ui_preview      the menus' screens with real games' pictures, to look at
+#                   (ui_preview.c)
 
 ROOT  := ../..
 CORE  := $(ROOT)/libretro-gpsp
@@ -28,14 +30,14 @@ CORE_OBJS := $(addprefix $(BUILD)/core_,$(addsuffix .o,$(CORE_C))) $(BUILD)/core
              $(addprefix $(BUILD)/comm_,$(addsuffix .o,$(notdir $(COMM_C)))) $(BUILD)/bios_data.o
 
 # The unit tests: the parts that don't touch the calculator, and stubs.
-UNIT_FRONT := nspire_gbz nspire_stubs nspire_backup nspire_states nspire_turn nspire_keys nspire_config nspire_lines \
+UNIT_FRONT := nspire_gbz nspire_stubs nspire_backup nspire_states nspire_ui nspire_turn nspire_keys nspire_config nspire_lines \
               nspire_brightness nspire_game_list nspire_blend nspire_zip nspire_paths \
               nspire_selfstore nspire_rom_convert
 UNIT_OBJS  := $(CORE_OBJS) $(BUILD)/core_video.o \
               $(addprefix $(BUILD)/front_,$(addsuffix .o,$(UNIT_FRONT))) $(BUILD)/test_host_stubs.o
 
 # gpsp-host: the whole frontend, with the renderers renamed as on the calculator.
-HOST_FRONT := nspire_gbz nspire_stubs nspire_backup nspire_states nspire_turn nspire_keys nspire_config \
+HOST_FRONT := nspire_gbz nspire_stubs nspire_backup nspire_states nspire_ui nspire_ui_screens nspire_turn nspire_keys nspire_config \
               nspire_input nspire_video_ui nspire_video_present nspire_frameskip \
               nspire_video_renderer_dispatch nspire_lines nspire_upscale_from_gba nspire_brightness \
               nspire_game_list nspire_blend nspire_zip nspire_loading nspire_save_manager \
@@ -45,7 +47,7 @@ HOST_OBJS  := $(CORE_OBJS) $(BUILD)/video_cc_renderer.o $(BUILD)/old_video_rende
               $(BUILD)/host_main.o $(BUILD)/host_gui.o $(BUILD)/host_nspire.o \
               $(BUILD)/test_host_hw.o $(BUILD)/test_host_platform.o
 
-all: $(BUILD)/core_tests $(BUILD)/frontend_tests $(BUILD)/gpsp-host
+all: $(BUILD)/core_tests $(BUILD)/frontend_tests $(BUILD)/gpsp-host $(BUILD)/ui_preview
 
 $(BUILD):
 	mkdir -p $@
@@ -100,6 +102,9 @@ $(BUILD)/core_tests: $(UNIT_OBJS) $(BUILD)/test_core_tests.o
 
 $(BUILD)/frontend_tests: $(UNIT_OBJS) $(BUILD)/test_frontend_tests.o
 	g++ $^ -o $@ -lz
+
+$(BUILD)/ui_preview: $(BUILD)/test_ui_preview.o $(BUILD)/front_nspire_ui.o $(BUILD)/front_nspire_ui_screens.o
+	gcc $^ -o $@
 
 # gui.c's menus are GCC nested functions, whose trampolines need an
 # executable stack. The wrapped functions cost virtual time (host_hw.c).

@@ -93,3 +93,7 @@ u32 random_skip;
 u32 global_enable_analog;
 u32 analog_sensitivity_level = 4;
 char nspire_clock_crashed_rom[512];
+
+/* The menus' frame (nspire_ui.c draws into it; the unit tests read it). */
+u16 nspire_landscape[320 * 240];
+void flip_screen_ui(void) {}

@@ -337,7 +337,13 @@ static void test_states(void)
     CHECK(states_save(3) == 1, "save 3 stored");
     nspire_compress_saves = 1;
     states_file_name(3, path, sizeof(path));
-    CHECK(file_size(path) == 32 + GBA_STATE_MEM_SIZE, "a stored state is %ld bytes", file_size(path));
+    /* the state, then its picture (packed, a few KB) */
+    CHECK(file_size(path) > 32 + GBA_STATE_MEM_SIZE && file_size(path) < 32 + GBA_STATE_MEM_SIZE + 32 * 1024,
+          "a stored state is %ld bytes", file_size(path));
+    {
+      static u16 pic[STATE_PIC_W * STATE_PIC_H];
+      CHECK(states_picture(3, pic), "the stored state has a picture");
+    }
     CHECK(states_file_info(3, &bytes, &compressed) && bytes == file_size(path) && !compressed,
           "slot 3: %ld bytes, compressed %d", bytes, compressed);
     run_frames(1);
@@ -358,7 +364,11 @@ static void test_states(void)
     CHECK(states_load(3) == 1, "load it packed");
     run_frames(1);
     CHECK(machine_hash() == hash_saved, "packed state differs after load");
-    CHECK(states_set_compressed(3, 0) == 1 && file_size(path) == 32 + GBA_STATE_MEM_SIZE, "uncompress slot 3");
+    CHECK(states_set_compressed(3, 0) == 1 && file_size(path) > 32 + GBA_STATE_MEM_SIZE, "uncompress slot 3");
+    {
+      static u16 pic[STATE_PIC_W * STATE_PIC_H];
+      CHECK(states_picture(3, pic), "the picture survives packing and unpacking");
+    }
     CHECK(states_set_compressed(3, 0) == 1, "uncompressing it again is fine");
     states_open_game(rom);
     CHECK(states_newest() == 3, "the order survives: newest %d", states_newest());

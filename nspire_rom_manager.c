@@ -15,6 +15,7 @@
 #include "nspire_paths.h"
 #include "nspire_rom_convert.h"
 #include "nspire_states.h"
+#include "nspire_ui_screens.h"
 
 #include <dirent.h>
 #include <stddef.h>
@@ -25,15 +26,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-/* gpSP's menu colors (gui.c's color16), as in the save manager */
-#define MENU_COLOR(r, g, b) ((u16)((((g) & 1) << 15) | ((b) << 10) | (((g) >> 1) << 5) | (r)))
-#define COLOR_BACK     MENU_COLOR(2, 8, 10)
-#define COLOR_ACTIVE   MENU_COLOR(31, 63, 31)
-#define COLOR_INACTIVE MENU_COLOR(13, 40, 18)
-#define COLOR_HELP     MENU_COLOR(16, 40, 24)
-#define COLOR_MARKED   MENU_COLOR(31, 50, 4)
-
-#define ROWS 19          /* lines 20 to 200 */
+#define ROWS UI_LIST_ROWS
 #define MAX_ROMS 256
 
 struct rom_entry
@@ -48,6 +41,7 @@ static unsigned char marked[MAX_ROMS];
 static int rom_count, selected, top;
 static char folder[512], status[100];
 static int last_percent;
+static int working_percent = -1;   /* a game being done, or -1 */
 
 static int is_rom_name(const char *name)
 {
@@ -120,47 +114,6 @@ static void size_text(long bytes, char *text, size_t size)
   }
 }
 
-static const char *kind_text(int kind)
-{
-  return kind == ROM_ZIP ? "zip" : kind == ROM_GBZ ? "gbz" : kind == ROM_PLAIN ? "gba" : "?";
-}
-
-static void draw(void)
-{
-  char line[100], name[64], bytes[24];
-  long total = 0;
-  int i, row;
-
-  for (i = 0; i < rom_count; i++)
-    total += roms[i].bytes;
-  size_text(total, bytes, sizeof(bytes));
-  clear_screen(COLOR_BACK);
-  snprintf(line, sizeof(line), "ROM manager: %d %s, %s", rom_count, rom_count == 1 ? "game" : "games", bytes);
-  print_string(line, COLOR_ACTIVE, COLOR_BACK, 0, 0);
-
-  if (!rom_count)
-    print_string("No games in this folder.", COLOR_INACTIVE, COLOR_BACK, 10, 20);
-  for (row = 0; row < ROWS && top + row < rom_count; row++)
-  {
-    const struct rom_entry *r = &roms[top + row];
-    u16 color = top + row == selected ? COLOR_ACTIVE : marked[top + row] ? COLOR_MARKED : COLOR_INACTIVE;
-    size_t len = strlen(r->name);
-    /* The name without its ".zip.tns", ".gba.tns"... */
-    snprintf(name, sizeof(name), "%.*s", (int)(len > 8 ? len - 8 : len), r->name);
-    size_text(r->bytes, bytes, sizeof(bytes));
-    snprintf(line, sizeof(line), "%c %-36.36s %8s %s", marked[top + row] ? '*' : ' ', name, bytes,
-             kind_text(r->kind));
-    print_string(line, color, COLOR_BACK, 10, 20 + row * 10);
-  }
-
-  if (status[0])
-    print_string(status, COLOR_HELP, COLOR_BACK, 10, 220);
-  else
-    print_string("enter: mark  A: all  C: compress  U: uncompress", COLOR_HELP, COLOR_BACK, 10, 220);
-  print_string("C makes .zip files, U .gba files. esc: back", COLOR_HELP, COLOR_BACK, 10, 230);
-  flip_screen();
-}
-
 static int marked_count(void)
 {
   int i, n = 0;
@@ -168,6 +121,104 @@ static int marked_count(void)
     n += marked[i];
   return n;
 }
+
+static const char *kind_text(int kind)
+{
+  return kind == ROM_ZIP ? "Zip" : kind == ROM_GBZ ? "GBZ" : kind == ROM_PLAIN ? "GBA" : "?";
+}
+
+/* The picked game's newest state's picture and how many states it has,
+ * looked up once it has stayed picked for a sixth of a second. */
+static u16 picture[120 * 80];
+static char picture_for[256];
+static int picture_has, picture_states;
+static int waiting = -1;
+static u32 picked_at;
+
+static int look_up(int i)
+{
+  static u16 big[STATE_PIC_W * STATE_PIC_H];
+  char path[800];
+  int newest;
+
+  if (!strcmp(picture_for, roms[i].name))
+    return 1;
+  if (i != waiting)
+  {
+    waiting = i;
+    picked_at = nspire_ticks();
+    return 0;
+  }
+  if (nspire_ticks() - picked_at < NSPIRE_TICK_HZ / 6)
+    return 0;
+  rom_path(roms[i].name, path, sizeof(path));
+  picture_has = states_peek(path, &picture_states, &newest, big);
+  if (picture_has)
+    ui_scale(picture, 120, 80, big, STATE_PIC_W, STATE_PIC_H, STATE_PIC_W);
+  snprintf(picture_for, sizeof(picture_for), "%s", roms[i].name);
+  return 1;
+}
+
+static void draw(void)
+{
+  static const char *const actions[] = { "C", "Make it a .zip", "U", "Make it a .gba", NULL };
+  static struct ui_manager_view v;
+  char bytes[24], tags[96];
+  long total = 0;
+  int i, row, marked_n = marked_count();
+
+  memset(&v, 0, sizeof(v));
+  v.title = "ROM manager";
+  v.name = "roms";
+  for (i = 0; i < rom_count; i++)
+    total += roms[i].bytes;
+  size_text(total, bytes, sizeof(bytes));
+  snprintf(v.subtitle, sizeof(v.subtitle), "%d %s, %s", rom_count, rom_count == 1 ? "game" : "games", bytes);
+  v.count = rom_count;
+  v.first = top;
+  v.picked = selected;
+  v.marked = marked_n;
+  v.empty = "No games in this folder.";
+  for (row = 0; row < ROWS && top + row < rom_count; row++)
+  {
+    ui_game_title(roms[top + row].name, v.rows[row].label, sizeof(v.rows[row].label), tags, sizeof(tags));
+    size_text(roms[top + row].bytes, v.rows[row].size, sizeof(v.rows[row].size));
+    v.rows[row].marked = marked[top + row];
+  }
+
+  if (marked_n)
+  {
+    long sum = 0;
+    for (i = 0; i < rom_count; i++)
+      if (marked[i])
+        sum += roms[i].bytes;
+    v.pic_empty = "";
+    snprintf(v.head, sizeof(v.head), "%d marked", marked_n);
+    snprintf(v.fact_names[0], sizeof(v.fact_names[0]), "Size");
+    size_text(sum, v.facts[0], sizeof(v.facts[0]));
+  }
+  else if (rom_count)
+  {
+    const struct rom_entry *r = &roms[selected];
+    int ready = look_up(selected);
+    v.picture = ready && picture_has ? picture : NULL;
+    v.pic_empty = ready ? "No saved state" : "";
+    ui_game_title(r->name, v.head, sizeof(v.head), tags, sizeof(tags));
+    snprintf(v.fact_names[0], sizeof(v.fact_names[0]), "File");
+    size_text(r->bytes, bytes, sizeof(bytes));
+    snprintf(v.facts[0], sizeof(v.facts[0]), "%s " UI_DOT " %s", kind_text(r->kind), bytes);
+    if (ready)
+    {
+      snprintf(v.fact_names[1], sizeof(v.fact_names[1]), "States");
+      snprintf(v.facts[1], sizeof(v.facts[1]), "%d", picture_states);
+    }
+  }
+  v.actions = actions;
+  v.status = status;
+  v.percent = working_percent;
+  ui_manager_draw(&v);
+}
+
 
 /* The status line while a game is done: "Compressing 2/5: Name 37%". */
 static const char *working_verb;
@@ -182,6 +233,7 @@ static void progress(unsigned long done, unsigned long total)
   last_percent = percent;
   snprintf(status, sizeof(status), "%s %d/%d: %s %d%%", working_verb, working_number, working_count,
            working_name, percent);
+  working_percent = percent;
   draw();
 }
 
@@ -269,6 +321,8 @@ static void act(int compress)
       done++;
   }
 
+  working_percent = -1;
+  picture_for[0] = 0;   /* new names */
   refresh();
   for (i = 0; i < rom_count; i++)
     if (!strcmp(roms[i].name, keep))
@@ -308,6 +362,8 @@ void nspire_rom_manager(void)
   }
   selected = top = 0;
   status[0] = 0;
+  picture_for[0] = 0;
+  waiting = -1;
   refresh();
   keys_wait_release();
   for (;;)

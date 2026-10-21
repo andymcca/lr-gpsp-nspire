@@ -39,6 +39,17 @@ void nspire_game_move_old_files(const char *rom_path);
 void states_open_game(const char *rom_path);
 void states_file_name(int slot, char *out, size_t size);
 
+/* A state's picture of the game (newer states have one): STATE_PIC_W x
+ * STATE_PIC_H in 5:6:5, 3/5 of the GBA's size. */
+#define STATE_PIC_W 144
+#define STATE_PIC_H 96
+/* 1 if the slot's state has a picture (put in pic), 0 if not. */
+int states_picture(int slot, unsigned short *pic);
+
+/* Another game's states, for the game list, leaving the open game's as they
+ * are: how many, the newest (-1: none), and its picture (1 if it has one). */
+int states_peek(const char *rom_path, int *count, int *newest, unsigned short *pic);
+
 int states_exists(int slot);
 int states_count(void);
 /* The most recently saved slot, or -1 if the game has none. */

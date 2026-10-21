@@ -13,6 +13,8 @@
 #                 runs it on Pokemon Emerald when $GBA_GAMES has it)
 #   perf          replay plus the picture output, for the speed estimate
 #                 (tests/calc_speed.sh runs it under the ARM926 model)
+#   ui_bench      what the menus' drawing costs (ui_bench.sh runs it under
+#                 the ARM926 model)
 # The calculator's files are compiled as for the calculator (nspire-gcc,
 # -O3, without -flto so they link here); the core is compiled with the
 # calculator's flags by arm-none-eabi-gcc with the PC tests' stand-in os.h
@@ -60,7 +62,8 @@ CORE_OBJS := $(addprefix $(BUILD)/core_,$(addsuffix .o,$(CORE_C))) $(BUILD)/core
              $(BUILD)/newlib_shim.o
 
 all: $(BUILD)/blend_test $(BUILD)/fill_test $(BUILD)/dynarec_test $(BUILD)/replay $(BUILD)/ram_code.gba \
-     $(BUILD)/badjump_test $(BUILD)/bad_jump_thumb.gba $(BUILD)/bad_jump_arm.gba $(BUILD)/perf
+     $(BUILD)/badjump_test $(BUILD)/bad_jump_thumb.gba $(BUILD)/bad_jump_arm.gba $(BUILD)/perf \
+     $(BUILD)/ui_bench
 
 $(BUILD):
 	mkdir -p $@
@@ -87,6 +90,12 @@ $(BUILD)/blend_test: $(BUILD)/test_blend_test.o $(BUILD)/calc_nspire_blend.o $(B
 
 $(BUILD)/fill_test: $(BUILD)/test_fill_test.o $(BUILD)/scanline_fill16.o $(BUILD)/newlib_shim.o
 	arm-none-eabi-gcc $(ARCH) -specs=rdimon.specs $^ -o $@
+
+$(BUILD)/calc_ui_bench.o: ui_bench.c | $(BUILD)
+	nspire-gcc $(CALC_FLAGS) -I$(ZLIB) -c $< -o $@
+
+$(BUILD)/ui_bench: $(BUILD)/calc_ui_bench.o $(BUILD)/calc_nspire_ui.o $(BUILD)/calc_nspire_ui_screens.o                    $(BUILD)/calc_nspire_turn.o $(BUILD)/newlib_shim.o
+	arm-none-eabi-gcc $(ARCH) -specs=rdimon.specs $^ $(LIBZ) -o $@
 
 # ---- The core ----
 

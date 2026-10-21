@@ -17,6 +17,7 @@
 #include "nspire_clock.h"
 #include "nspire_brightness.h"
 #include "nspire_paths.h"
+#include "nspire_ui_screens.h"
 
 #include <os.h>
 #include <ctype.h>
@@ -714,31 +715,30 @@ void nspire_speed_test(void)
   }
 
   /* Results, until a key is pressed. */
-  keys_wait_release();
-  do
   {
-    u16 white = 0xFFFF, dim = 0x5294;
-    clear_screen(0);
-    snprintf(line, sizeof(line), "Speed test%s, CPU %u MHz", stopped ? " (stopped)" : "", (unsigned)mhz);
-    print_string(line, white, 0, 10, 10);
-    print_string("ms per frame:  cpu = running the game,", dim, 0, 10, 30);
-    print_string("gfx = drawing it, out = showing it", dim, 0, 10, 40);
-    for (i = 0; i < done; i++)
+    struct ui_speed_view view;
+    memset(&view, 0, sizeof(view));
+    view.mhz = (unsigned)mhz;
+    view.stopped = stopped;
+    for (i = 0; i < done && i < 4; i++)
     {
-      print_string(speed_test_parts[i].name, white, 0, 10, 60 + i * 34);
-      if (speed_test_parts[i].pace == PACE_FAST_FORWARD)
-        snprintf(line, sizeof(line), "%u.%u game frames a second, %u.%u drawn", TENTHS(stats[i].game_fps),
-                 TENTHS(stats[i].drawn_fps));
-      else
-        snprintf(line, sizeof(line), "%u.%u fps  cpu %u.%u  gfx %u.%u  out %u.%u", TENTHS(stats[i].game_fps),
-                 TENTHS(stats[i].cpu_ms), TENTHS(stats[i].render_ms), TENTHS(stats[i].output_ms));
-      print_string(line, dim, 0, 20, 72 + i * 34);
+      struct ui_speed_part *p = &view.parts[view.count++];
+      p->name = speed_test_parts[i].name;
+      p->fast_forward = speed_test_parts[i].pace == PACE_FAST_FORWARD;
+      p->game_fps = stats[i].game_fps;
+      p->drawn_fps = stats[i].drawn_fps;
+      p->cpu_ms = stats[i].cpu_ms;
+      p->gfx_ms = stats[i].render_ms;
+      p->out_ms = stats[i].output_ms;
     }
-    print_string("Saved to gpsp_results.txt. Press a key.", dim, 0, 10, 220);
-    flip_screen();
-    update_at_vblank();
-    keys_poll();
-  } while (!any_key_down());
+    keys_wait_release();
+    ui_speed_draw(&view);
+    do
+    {
+      update_at_vblank();
+      keys_poll();
+    } while (!any_key_down());
+  }
   keys_wait_release();
   nspire_reset_timing();
 }

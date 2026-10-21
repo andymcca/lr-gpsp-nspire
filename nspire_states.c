@@ -5,6 +5,7 @@
 #include "nspire_zip.h"
 #include "nspire_frontend.h"
 #include "nspire_paths.h"
+#include "nspire_ui.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -22,6 +23,13 @@
 #define STATE_FLAG_COUNTED 1u
 /* The state follows the header as it is, not packed (Compress saves off). */
 #define STATE_FLAG_STORED  2u
+/* A picture of the game follows the state (reserved[0] is its size). After
+ * the state, so builds that don't know it still load the state. */
+#define STATE_FLAG_PICTURE 4u
+#define PICTURE_MAX   (8 + STATE_PIC_W * STATE_PIC_H * 2 + 1024)
+/* zlib's fastest: a picture packs about as small, in a fraction of the time
+ * (it's made at every save; tests/arm/ui_bench.sh) */
+#define PICTURE_LEVEL 1
 #define STATE_LEVEL   6       /* zlib level: 6 packs nearly as small as 9, faster */
 #define CHUNK         16384   /* file reads and writes go through this */
 
@@ -33,7 +41,15 @@ struct state_header
   u32 raw_size;      /* GBA_STATE_MEM_SIZE */
   u32 packed_size;   /* zlib bytes after the header (raw_size if stored) */
   u32 flags;
-  u32 reserved[2];
+  u32 reserved[2];   /* [0]: the picture's size with STATE_FLAG_PICTURE */
+};
+
+/* The picture: width and height (u16 each), the zlib size (u32), then the
+ * 5:6:5 pixels packed. */
+struct picture_header
+{
+  u16 w, h;
+  u32 packed_size;
 };
 
 static char base_path[512];   /* "<saves folder>/Pokemon.gba" */
@@ -311,8 +327,112 @@ static int write_payload(FILE *f, const u8 *raw, struct state_header *header)
   return write_packed(f, raw, header);
 }
 
+/* The game's last frame at a fifth of its size... at 3/5: 144x96. */
+static int make_picture(u16 *pic)
+{
+  if (!gba_screen_pixels)
+    return 0;
+  ui_scale(pic, STATE_PIC_W, STATE_PIC_H, gba_screen_pixels, GBA_SCREEN_WIDTH, GBA_SCREEN_HEIGHT,
+           GBA_SCREEN_PITCH);
+  return 1;
+}
+
+/* Packs the picture into block (PICTURE_MAX bytes); returns its size, 0 if
+ * it didn't pack. */
+static u32 pack_picture(const u16 *pic, u8 *block)
+{
+  struct picture_header ph;
+  uLongf packed = PICTURE_MAX - sizeof(ph);
+  if (compress2(block + sizeof(ph), &packed, (const Bytef *)pic, STATE_PIC_W * STATE_PIC_H * 2, PICTURE_LEVEL)
+      != Z_OK)
+    return 0;
+  ph.w = STATE_PIC_W;
+  ph.h = STATE_PIC_H;
+  ph.packed_size = (u32)packed;
+  memcpy(block, &ph, sizeof(ph));
+  return (u32)(sizeof(ph) + packed);
+}
+
+/* The picture block after a state, or 0. */
+static u32 read_picture_block(FILE *f, const struct state_header *header, u8 *block)
+{
+  u32 size = header->reserved[0];
+  if (!(header->flags & STATE_FLAG_PICTURE) || size < sizeof(struct picture_header) || size > PICTURE_MAX ||
+      fseek(f, (long)(sizeof(*header) + header->packed_size), SEEK_SET) != 0)
+    return 0;
+  return fread(block, 1, size, f) == size ? size : 0;
+}
+
+static int unpack_picture(const u8 *block, u32 size, u16 *pic)
+{
+  struct picture_header ph;
+  uLongf raw = STATE_PIC_W * STATE_PIC_H * 2;
+  memcpy(&ph, block, sizeof(ph));
+  if (ph.w != STATE_PIC_W || ph.h != STATE_PIC_H || ph.packed_size + sizeof(ph) > size)
+    return 0;
+  return uncompress((Bytef *)pic, &raw, block + sizeof(ph), ph.packed_size) == Z_OK &&
+         raw == STATE_PIC_W * STATE_PIC_H * 2;
+}
+
+/* The picture of the state in a file: 1 if it has one. */
+static int file_picture(const char *path, u16 *pic)
+{
+  static u8 block[PICTURE_MAX];
+  struct state_header header;
+  int ok = 0;
+  FILE *f = fopen(path, "rb");
+  u32 size;
+
+  if (!f)
+    return 0;
+  if (fread(&header, sizeof(header), 1, f) == 1 && !memcmp(header.magic, STATE_MAGIC, 4) &&
+      (size = read_picture_block(f, &header, block)) != 0)
+    ok = unpack_picture(block, size, pic);
+  fclose(f);
+  return ok;
+}
+
+int states_picture(int slot, u16 *pic)
+{
+  char path[600];
+  if (!states_exists(slot))
+    return 0;
+  states_file_name(slot, path, sizeof(path));
+  return file_picture(path, pic);
+}
+
+int states_peek(const char *rom_path, int *count, int *newest, u16 *pic)
+{
+  /* the open game's slots stay as they are */
+  static char keep_base[sizeof(base_path)];
+  static unsigned char keep_used[STATE_SLOTS], keep_counted[STATE_SLOTS];
+  static u32 keep_counters[STATE_SLOTS], keep_mtimes[STATE_SLOTS];
+  int has_picture;
+
+  memcpy(keep_base, base_path, sizeof(base_path));
+  memcpy(keep_used, used, sizeof(used));
+  memcpy(keep_counted, counted, sizeof(counted));
+  memcpy(keep_counters, counters, sizeof(counters));
+  memcpy(keep_mtimes, mtimes, sizeof(mtimes));
+
+  states_open_game(rom_path);
+  *count = states_count();
+  *newest = states_newest();
+  has_picture = *newest >= 0 && pic && states_picture(*newest, pic);
+
+  memcpy(base_path, keep_base, sizeof(base_path));
+  memcpy(used, keep_used, sizeof(used));
+  memcpy(counted, keep_counted, sizeof(counted));
+  memcpy(counters, keep_counters, sizeof(counters));
+  memcpy(mtimes, keep_mtimes, sizeof(mtimes));
+  return has_picture;
+}
+
 int states_save(int slot)
 {
+  static u16 pic[STATE_PIC_W * STATE_PIC_H];
+  static u8 block[PICTURE_MAX];
+  u32 block_size = 0;
   char path[600], temp_path[620];
   struct state_header header;
   u8 *raw;
@@ -334,6 +454,11 @@ int states_save(int slot)
   header.version = STATE_VERSION;
   header.raw_size = GBA_STATE_MEM_SIZE;
   header.flags = STATE_FLAG_COUNTED | (nspire_compress_saves ? 0 : STATE_FLAG_STORED);
+  if (make_picture(pic) && (block_size = pack_picture(pic, block)) != 0)
+  {
+    header.flags |= STATE_FLAG_PICTURE;
+    header.reserved[0] = block_size;
+  }
   header.counter = 1;
   for (i = 0; i < STATE_SLOTS; i++)
     if (used[i] && counters[i] >= header.counter)
@@ -348,6 +473,7 @@ int states_save(int slot)
   if (ok)
   {
     ok = fwrite(&header, sizeof(header), 1, f) == 1 && write_payload(f, raw, &header) &&
+         (!block_size || fwrite(block, 1, block_size, f) == block_size) &&
          fseek(f, 0, SEEK_SET) == 0 && fwrite(&header, sizeof(header), 1, f) == 1;
     if (fclose(f) != 0)
       ok = 0;
@@ -483,6 +609,8 @@ int states_file_info(int slot, long *bytes, int *compressed)
  * (it's then this build's, counted as older than the others). */
 int states_set_compressed(int slot, int compress)
 {
+  static u8 block[PICTURE_MAX];
+  u32 block_size = 0;
   char path[600], temp_path[620];
   struct state_header header;
   u8 *raw;
@@ -509,6 +637,14 @@ int states_set_compressed(int slot, int compress)
       ok = header.version == STATE_VERSION && header.raw_size == GBA_STATE_MEM_SIZE &&
            ((header.flags & STATE_FLAG_STORED) ? fread(raw, 1, GBA_STATE_MEM_SIZE, f) == GBA_STATE_MEM_SIZE
                                                : read_packed(f, raw, &header));
+      /* the picture stays with it */
+      if (ok)
+        block_size = read_picture_block(f, &header, block);
+      if (!block_size)
+      {
+        header.flags &= ~STATE_FLAG_PICTURE;
+        header.reserved[0] = 0;
+      }
     }
     else if (fseek(f, 0, SEEK_END) == 0 && (size = ftell(f)) == GBA_STATE_MEM_SIZE &&
              fseek(f, 0, SEEK_SET) == 0)
@@ -547,6 +683,7 @@ int states_set_compressed(int slot, int compress)
   if (ok)
   {
     ok = fwrite(&header, sizeof(header), 1, f) == 1 && write_payload(f, raw, &header) &&
+         (!block_size || fwrite(block, 1, block_size, f) == block_size) &&
          fseek(f, 0, SEEK_SET) == 0 && fwrite(&header, sizeof(header), 1, f) == 1;
     if (fclose(f) != 0)
       ok = 0;

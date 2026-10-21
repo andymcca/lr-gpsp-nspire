@@ -15,6 +15,8 @@ void fill_rect(u32 x, u32 y, u32 w, u32 h, u16 color);
 void blit_to_screen(u16 *src, u32 w, u32 h, u32 x, u32 y);
 u16 *copy_screen(void);
 void flip_screen(void);
+/* Shows the menus' kit frame (nspire_landscape, 320x240 5:6:5, nspire_ui.c). */
+void flip_screen_ui(void);
 void video_write_mem_savestate(file_tag_type savestate_file);
 void video_read_savestate(file_tag_type savestate_file);
 

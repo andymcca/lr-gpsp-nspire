@@ -79,7 +79,7 @@ LOCAL_OBJS := \
   nspire_gbz.o nspire_states.o nspire_config.o nspire_clock.o clock_switch_nspire.o nspire_keys.o \
   nspire_brightness.o nspire_game_list.o nspire_blend.o \
   nspire_zip.o nspire_loading.o nspire_save_manager.o nspire_paths.o \
-  nspire_selfstore.o nspire_rom_convert.o nspire_rom_manager.o
+  nspire_selfstore.o nspire_rom_convert.o nspire_rom_manager.o nspire_ui.o nspire_ui_screens.o
 
 OBJS := $(COMM_OBJS) $(CORE_OBJS) $(CORE_ASM_OBJS) $(CORE_CXX_OBJS) \
         $(LOCAL_OBJS) gui.o

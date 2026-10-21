@@ -36,6 +36,8 @@ Build, test, deploy
     tests/arm/run.sh             # ARM code under qemu-arm: blended pictures, the
                                  # scanline fill, the dynarec, an Emerald replay
     python3 -I tests/calc_checks.py   # the calculator build's disassembly
+    tests/arm/ui_bench.sh        # what the menus' drawing costs (ARM926 model)
+    tests/host/build/ui_preview OUT GAME.ppm BATTLE.ppm   # the menus, to look at
 
 Every build that goes on the calculator passes all of these first, and the
 simulator's screenshots of anything changed on screen get looked at
@@ -69,7 +71,10 @@ Where things are
 | `nspire_turn.c` | turning pictures for the portrait LCD (sharp scalings, rectangles) |
 | `nspire_blend.c` | the blended scalings in one pass, with interframe blending |
 | `nspire/nspire.c` | the screen buffers and flip, timer, caches |
-| `nspire_video_ui.c` | the menus' drawing (a landscape 5:5:5 frame turned by flip_screen) |
+| `nspire_ui.c`, `nspire_ui.h` | the menus' drawing kit: smooth text, rounded shapes, pictures scaled, the blurred backdrop; the look's colors |
+| `nspire_ui_screens.c` | the screens: game list, main menu, settings pages, the two managers, speed test results |
+| `nspire_ui_font.h`, `tools/ui_font.py` | Inter pre-drawn at the menus' sizes (made by the tool; `docs/fonts/` has its license) |
+| `nspire_video_ui.c` | the menus' frame (landscape 5:6:5) to the LCD: `flip_screen_ui`, and gpSP's old text drawing |
 | `nspire_loading.c` | the loading screen |
 | `nspire_save_manager.c` | the save manager |
 | `nspire_rom_manager.c`, `nspire_rom_convert.c` | the ROM manager: zipping and unzipping ROMs |
@@ -81,7 +86,7 @@ Where things are
 | `nspire_config.c` | the settings files (format at the top) |
 | `nspire_keys.c`, `nspire_input.c` | key bindings, the keypad, hotkeys |
 | `nspire_brightness.c`, `nspire_clock.c` | backlight, CPU speed |
-| `gui.c` | gpSP's own menus and file list (kept; new settings are lines in them) |
+| `gui.c` | gpSP's menus and file list: what they do; they fill in the screens' views (`list_draw`, `draw_menu_ui`) |
 | `libretro-gpsp/gba_memory.c` | the core's ROM loading: zip and progress hooks are here |
 | `libretro-gpsp/cpu_threaded.c` | the dynarec: translating blocks, linking their branches, Partial/Classic SMC |
 | `nspire/scanline_fill16.S` | video.cc's backdrop fill in ARM assembly |
@@ -92,9 +97,10 @@ Where things are
 Decisions and why
 -----------------
 
-* **gpSP's own menus stay** (the user asked: "dont make a new menu"). New
-  settings are lines in the existing submenus; the save manager is one line
-  in the main menu that opens its own screen, as the speed test does.
+* **gpSP's own menus stay, in a new look** (first "dont make a new menu";
+  then, 2026-10-19, "make a new ui for gpsp make it look nice", the
+  "Clean" mockup picked): gui.c still has the menus' lines and what they
+  do; only the drawing is new (see "The new look").
 * **Tear-free output**: frames are turned in software into one of three
   portrait buffers, never the one being shown, and the LCD switches buffers
   between refreshes. Ndless's compatibility mode (the panel turns the
@@ -329,6 +335,8 @@ PC only (not seen on the calculator yet):
   program file, the ROM manager (how long zipping a 16 MB ROM takes).
 * A game jumping where no code can run stops with a message (the damaged
   Advance Wars): qemu-arm and the PC tests only.
+* The new look (2026-10-20): every screen, state pictures, tab between the
+  settings pages; its costs are the ARM926 model's.
 
 
 History
@@ -370,6 +378,63 @@ History
   ROM; a game that jumps where no code can run now stops with a message
   instead of crashing the calculator.
 
+
+The new look (2026-10-20)
+-------------------------
+
+The owner picked "Clean" of two mockups (`~/nspire/build/gpsp-ui-mockups`,
+`clean.py`): smooth type (Inter) on near-black, the picked line on a white
+bar with dark text, one violet accent (#8B7CFF) for what's on, key hints
+as key caps along the bottom. The tokens are `UI_*` in `nspire_ui.h`.
+
+* **Structure.** gui.c keeps every menu line and what it does; each frame it
+  fills in a view (`struct ui_menu_view`, `ui_list_view`) and
+  `nspire_ui_screens.c` draws it. The main menu was reordered (Resume, Save
+  state, Load state, Restart / Settings, Save manager, ROM manager / Game
+  list, Exit gpSP; gaps in the line numbers are dividers). The old
+  submenus are the Settings pages, in `settings_pages[]`, turned with tab.
+  Lines a page leaves out: "Back" (esc) and cheats that aren't loaded
+  (`option_hidden`); up/down skip them.
+* **Drawing.** Everything draws into `nspire_landscape` (320x240 5:6:5) and
+  `flip_screen_ui` turns it onto the portrait LCD (or converts it for a
+  landscape one). A screen is only drawn again when its view changed
+  (memcmp of the view; pictures behind pointers bump `version`). gui.c's
+  `color16` and the old screens' colors are 5:6:5 now too.
+* **Text.** `tools/ui_font.py` pre-draws Inter (variable: weight and optical
+  size per font) 8x8 supersampled, 4 bits a pixel, at two subpixel
+  positions, with kerning; 67 KB. Control codes stand for the ellipsis,
+  middle dot, quotes and arrows.
+* **Pictures.** A state saved by this build has a 144x96 picture of the
+  game after it (`STATE_FLAG_PICTURE`; `reserved[0]` is the block's size:
+  w, h, zlib size, then the pixels at zlib level 1), so older builds still
+  load it. The game list and ROM manager look up the picked game's newest
+  state (`states_peek`, which leaves the open game's slots alone) once it
+  has stayed picked for a sixth of a second, so held arrows don't wait for
+  files. The CPU has no divide: `ui_scale` works out its spans once and
+  works on "spread" pixels (0x07E0F81F: fields with room for weights up to
+  32), across then down.
+* **Tests.** The PC tests no longer find the picked line by its pixels:
+  each screen names itself and its picked line in `ui_shown` ("main:2",
+  "Graphics:0", "list:5"), which the simulator puts in its report; the
+  scripts walk the menus with `to_main()` / `to_page()` in host_tests.py.
+  `ui_wrap` complains on the PC when a text is cut short.
+
+What it costs on the calculator (`tests/arm/ui_bench.sh`, ARM926 model, a
+real Emerald frame and state), nothing of it while a game runs:
+
+| | ms |
+|---|---|
+| opening the menu (the blurred backdrop, the paused picture) | 21 |
+| the main menu drawn and turned (only when it changes) | 9.3 |
+| a settings page | 6.4 |
+| the game list | 11 |
+| a state's picture made and packed, at each save | 26.5 |
+| (the state itself packed, at each save, as before) | 255 |
+| a state's picture unpacked and scaled (list, managers) | 7 |
+
+The first version took 48 ms to open the menu and 58 ms more per save:
+`ui_scale` divided per pixel (the CPU has no divide) and the picture was
+packed at level 6. The program grew from 468 KB to 560 KB (the font).
 
 Open items and ideas
 --------------------
