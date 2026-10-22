@@ -34,15 +34,16 @@ extern void (*nspire_rom_progress)(u32 done, u32 total);
  * and a key to go on. */
 static void draw_screen(const char *what, int bar, const char *line, u16 line_color, const char *more)
 {
-  int y = has_picture ? 152 : 104;
+  int y = has_picture ? 156 : 104;      /* the name's baseline */
   char fit[160];
 
   ui_begin();
   ui_fill(UI_BG);
   if (has_picture)
   {
-    ui_rrect_alpha((UI_W - STATE_PIC_W) / 2 - 1, 29, STATE_PIC_W + 2, STATE_PIC_H + 2, 5, UI_TEXT, 5);
-    ui_blit_rounded((UI_W - STATE_PIC_W) / 2, 30, picture, STATE_PIC_W, STATE_PIC_H, STATE_PIC_W, 4);
+    /* rows 20-117: 12 clear rows above the "Loading" over the name */
+    ui_rrect_alpha((UI_W - STATE_PIC_W) / 2 - 1, 20, STATE_PIC_W + 2, STATE_PIC_H + 2, 5, UI_TEXT, 5);
+    ui_blit_rounded((UI_W - STATE_PIC_W) / 2, 21, picture, STATE_PIC_W, STATE_PIC_H, STATE_PIC_W, 4);
   }
   ui_text_center(UI_W / 2, y - 18, what, &ui_font_small, UI_TEXT3);
   ui_text_center(UI_W / 2, y, ui_fit(title, &ui_font_title, 290, fit, sizeof(fit)), &ui_font_title, UI_TEXT);

@@ -1524,6 +1524,8 @@ wait 1.2
 shot loading
 wait 3
 shot game
+press S
+wait 1
 quit
 """)
     loading = r.shot("loading")
@@ -1537,6 +1539,28 @@ quit
     left, right = loading.at(81, 135), loading.at(238, 135)
     check(left[2] > 200 and right[2] < 100, "loading: the bar is part way, %s %s" % (left, right))
     check(r.shot("game").box() == (0, 13, 319, 226), "loading: then the game")
+
+    # With a state to resume from, its picture above: clear of the text.
+    again = Run("loading2", reuse=r).run(REAL_COSTS + """cost read 600
+wait 1
+press enter
+wait 1.2
+shot loading
+quit
+""")
+    loading = again.shot("loading")
+    back = loading.at(5, 5)
+    rows = [y for y in range(240) if any(loading.at(x, y) != back for x in range(100, 220))]
+    bands = []
+    for y in rows:
+        if bands and y == bands[-1][1] + 1:
+            bands[-1][1] = y
+        else:
+            bands.append([y, y])
+    check(len(bands) >= 3 and bands[0][1] - bands[0][0] >= 90,
+          "loading: with a state, its picture on top: rows %s" % bands)
+    if len(bands) >= 2:
+        check(bands[1][0] - bands[0][1] >= 10, "loading: a gap between the picture and the text: rows %s" % bands)
 
 
 def test_zipped_game():
