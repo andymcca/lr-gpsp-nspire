@@ -53,8 +53,11 @@ replay needs the game, its BIOS and the owner's state in `$GBA_GAMES`
 skipped without them. `build/replay ROM BIOS STATE MB POLICY RENDERER FRAMES
 KEYS DIR` also writes those frames as pictures (`DIR/f*.ppm`) to look at.
 
-To the calculator: `nspire-link put -f gpsp_libretro.tns /gba/_gpSP.tns`,
-then `get` it back and compare checksums. The calculator only answers over
+To the calculator: `tools/deploy.sh` (tests, build, backs up the
+calculator's copy, keeps its settings area, uploads, reads it back and
+compares; `--no-test` skips the tests, `--check` only compares). By hand:
+`nspire-link put -f gpsp_libretro.tns /gba/_gpSP.tns`, then `get` it back
+and compare checksums. The calculator only answers over
 USB at its home screen (not while a program runs), and other sessions may
 be using `nspire-link`: check `pgrep -x nspire-link` first.
 
