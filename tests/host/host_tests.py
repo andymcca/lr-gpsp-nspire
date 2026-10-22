@@ -170,6 +170,12 @@ def to_page(page):
     return to_main("settings") + "press enter\nwait 0.3\n" + "press tab\n" * PAGES.index(page)
 
 
+def change(key, times=1):
+    """Script lines: changes a settings page's picked value (enter picks it,
+    left or right change it, enter keeps it)."""
+    return "press enter\n" + ("press %s\n" % key) * times + "press enter\n"
+
+
 # ---- Running gpSP ----
 
 class Run:
@@ -374,10 +380,7 @@ press enter
 wait 2
 press menu
 wait 0.3
-""" + to_page("Graphics") + """press left
-press left
-press left
-wait 0.3
+""" + to_page("Graphics") + change("left", 3) + """wait 0.3
 shot option
 press esc
 press esc
@@ -397,6 +400,77 @@ shot game
 quit
 """)
     check(again.shot("game").box() == (40, 40, 279, 199), "unscaled: kept for the next start")
+
+
+def test_settings_select_first():
+    """On the settings pages left and right turn the pages; a value changes
+    only after enter picks it (then left/right change it, enter keeps it,
+    esc puts it back). A key line takes enter before left/right pick its
+    key."""
+    r = Run("select_first").run("""
+wait 1
+press enter
+wait 2
+press menu
+wait 0.3
+""" + to_page("Graphics") + """press right
+wait 0.2
+shot right
+press left
+wait 0.2
+shot left
+press left
+wait 0.2
+shot wrapped
+press right
+press enter
+press left
+press left
+press left
+wait 0.2
+shot editing
+press right
+wait 0.2
+shot still_editing
+press esc
+wait 0.2
+shot cancelled
+press esc
+press esc
+wait 2.5
+shot game
+press menu
+wait 0.3
+""" + to_page("Controls") + """press enter
+press right
+wait 0.2
+shot key2
+press esc
+press right
+wait 0.2
+shot saving
+quit
+""")
+    def accent(shot):
+        """The accent's box behind a value being changed, on the first line."""
+        return any(shot.at(x, y)[2] > 200 and shot.at(x, y)[0] < 170 for y in range(34, 49) for x in range(180, 310))
+    check(r.shot("right").ui == "Emulator:0", "select first: right turns to Emulator: %s" % r.shot("right").ui)
+    check(r.shot("left").ui == "Graphics:0", "select first: left turns back: %s" % r.shot("left").ui)
+    check(r.shot("wrapped").ui == "About:0", "select first: left from the first page is the last: %s"
+          % r.shot("wrapped").ui)
+    check(not accent(r.shot("left")), "select first: nothing being changed before enter")
+    check(r.shot("editing").ui == "Graphics:0" and accent(r.shot("editing")),
+          "select first: enter picks the value, left changes it: %s" % r.shot("editing").ui)
+    check(r.shot("still_editing").ui == "Graphics:0", "select first: right changes it too, the page stays: %s"
+          % r.shot("still_editing").ui)
+    check(r.shot("cancelled").ui == "Graphics:0" and not accent(r.shot("cancelled")),
+          "select first: esc puts it back and stays on the page: %s" % r.shot("cancelled").ui)
+    check(r.shot("game").box() == (0, 13, 319, 226), "select first: the scaling as it was: %s"
+          % (r.shot("game").box(),))
+    check(r.shot("key2").ui == "Controls:0", "select first: on a picked key line right is its second key: %s"
+          % r.shot("key2").ui)
+    check(r.shot("saving").ui == "Saving:0", "select first: after esc, right turns the page: %s"
+          % r.shot("saving").ui)
 
 
 def test_brightness():
@@ -424,10 +498,7 @@ wait 0.3
 note down1
 press menu
 wait 0.3
-""" + to_page("Graphics") + """press down
-press left
-press left
-wait 0.3
+""" + to_page("Graphics") + "press down\n" + change("left", 2) + """wait 0.3
 note menu_dimmer
 press esc
 press esc
@@ -1093,10 +1164,12 @@ press up
 wait 0.3
 shot brighter_line
 press enter
+press enter
 wait 0.2
 press 9
 wait 0.3
 shot changed
+press esc
 press esc
 press esc
 wait 0.5
@@ -1242,8 +1315,7 @@ press down
 press down
 press down
 press down
-press right
-wait 0.2
+""" + change("right") + """wait 0.2
 shot option
 press esc
 press esc
@@ -1407,8 +1479,7 @@ press menu
 wait 0.3
 """ + to_page("Graphics") + "press down\n" * 9 + """wait 0.2
 shot unlimited
-press left
-wait 0.2
+""" + change("left") + """wait 0.2
 shot ten
 press esc
 press esc
@@ -1434,14 +1505,11 @@ press enter
 wait 1
 press menu
 wait 0.3
-""" + to_page("Graphics") + """press left
-press left
-""" + "press down\n" * 6 + """press right
-wait 0.2
+""" + to_page("Graphics") + change("left", 2) + "press down\n" * 6 + change("right") + """wait 0.2
 shot graphics
 press tab
 wait 0.3
-""" + "press down\n" * 5 + """press right
+""" + "press down\n" * 5 + """press enter
 wait 0.2
 shot emulator
 press esc
@@ -1456,8 +1524,7 @@ wait 0.5
 """ + three_shots("saved") + """wait 2.5
 """ + three_shots("after") + """press menu
 wait 0.3
-""" + to_page("Graphics") + """press right
-press esc
+""" + to_page("Graphics") + change("right") + """press esc
 press esc
 wait 2
 shot full
@@ -1467,8 +1534,7 @@ shot full_saved
 wait 2.5
 """ + three_shots("full_after") + """press menu
 wait 0.3
-""" + to_page("Graphics") + """press left
-press esc
+""" + to_page("Graphics") + change("left") + """press esc
 press esc
 wait 1.5
 """ + three_shots("back") + """press Q
@@ -1748,7 +1814,7 @@ def test_every_menu_line():
     seen = [(MAIN["settings"] + i) % len(MAIN) for i in range(len(MAIN))]
     check(main == seen, "every menu line: main highlights %s" % main)
 
-TESTS = [test_play, test_menu, test_menu_slow_game, test_old_settings, test_unscaled_chosen,
+TESTS = [test_play, test_menu, test_menu_slow_game, test_old_settings, test_unscaled_chosen, test_settings_select_first,
          test_brightness, test_states, test_number_keys, test_move_and_sort, test_speed_test,
          test_hotkeys_in_menu_keys, test_folders, test_gbz, test_menu_load_and_exit, test_frameskip,
          test_fps_counter_and_fast_forward, test_fast_forward_pace, test_fast_forward_max_speed, test_blended, test_loading_screen, test_zipped_game, test_damaged_rom,

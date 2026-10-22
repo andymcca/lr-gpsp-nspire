@@ -111,9 +111,11 @@ states it has and its file. The main menu opens over the paused game,
 blurred: *Resume*, *Save state*, *Load state* (left/right pick the slot; the
 picture beside it is that state's), *Restart*, then *Settings*, *Save
 manager*, *ROM manager*, then *Game list* and *Exit gpSP*. *Settings* are
-pages that **tab** goes through (**shift+tab** back): *Graphics*,
+pages that **left/right** (or **tab**, **shift+tab** back) go through: *Graphics*,
 *Emulator*, *Controls* (the keys), *Saving* (save options, and cheats when a
-game has them) and *About*. **esc** goes back. New states keep a small
+game has them) and *About*. To change a setting, **enter** picks it, then
+left/right change it and **enter** keeps it (**esc** puts it back); enter
+flips an on/off setting. **esc** goes back. New states keep a small
 picture of the game (after the state, so older builds still load them); the
 loading screen shows the one a game resumes from.
 
@@ -200,8 +202,8 @@ A `.gbz.tns` is read 32 KB at a time like a big `.gba` (`nspire_gbz.h` has the
 format) and shares the `.gba`'s saves, states and settings. Older gpSP builds
 can't read compressed states or ROMs.
 
-**Keys.** Settings, *Controls* has two keys per action (left/right pick one,
-enter sets it, del clears it), key combinations (hold a key and press another),
+**Keys.** Settings, *Controls* has two keys per action (enter picks the
+line, left/right pick a key, enter sets it, del clears it), key combinations (hold a key and press another),
 and new hotkeys: brightness up and down (+ and -), next and previous save
 slot (**)** and **(**, as in PocketSNES; settings from before them get these
 keys where they're free), and, unbound at first, load newest state, FPS

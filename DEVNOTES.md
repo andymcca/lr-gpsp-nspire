@@ -396,7 +396,13 @@ as key caps along the bottom. The tokens are `UI_*` in `nspire_ui.h`.
   `nspire_ui_screens.c` draws it. The main menu was reordered (Resume, Save
   state, Load state, Restart / Settings, Save manager, ROM manager / Game
   list, Exit gpSP; gaps in the line numbers are dividers). The old
-  submenus are the Settings pages, in `settings_pages[]`, turned with tab.
+  submenus are the Settings pages, in `settings_pages[]`, turned with
+  left/right or tab. A value changes only after enter picks its line
+  (`editing` in gui.c: left/right change it, enter keeps it, esc puts the
+  old value back); enter flips an off/on line (`option_is_switch`); a key
+  line takes enter, then left/right pick key 1 or 2, enter captures, esc
+  leaves it. The owner asked for this (2026-10-21): left/right changed
+  values by accident while moving around.
   Lines a page leaves out: "Back" (esc) and cheats that aren't loaded
   (`option_hidden`); up/down skip them.
 * **Drawing.** Everything draws into `nspire_landscape` (320x240 5:6:5) and

@@ -944,8 +944,8 @@ typedef struct _menu_type menu_type;
 #define binding_option(action, line_number)                                   \
 {                                                                             \
   NULL, NULL, NULL, NULL, NULL, NULL, action,                                 \
-  "Left/right: key 1 or 2. Enter: set it (hold a key\n"                       \
-  "and press another for a combination). del: clear.",                       \
+  "Enter picks the line; left/right: key 1 or 2; enter\n"                     \
+  "sets it (hold a key and press another for two). del: clear.",             \
   line_number, KEY_BINDING_OPTION                                             \
 }
 
@@ -1730,6 +1730,12 @@ u32 menu(u16 *original_screen)
 
 #ifdef NSPIRE_BUILD
   u32 key_column = 0;          /* the key picked with left/right on key lines */
+#if defined(NSPIRE_LIBRETRO)
+  /* On the settings pages left/right turn the pages; enter picks a line to
+   * change (then left/right change it, enter keeps it, esc puts it back) */
+  int editing = 0;
+  u32 edit_from = 0;           /* the value when it was picked, for esc */
+#endif
   u32 current_option_y = 0;
   char menu_status[80] = "";   /* what the last action did */
   u8 *settings_for_options[] = { "all games", "this game only" };
@@ -2614,7 +2620,7 @@ u32 menu(u16 *original_screen)
     action_option(menu_restart, NULL, "Restart",
      "Starts the game over, as if the GBA were switched off and on.", 3),
     submenu_option(&graphics_sound_menu, "Settings",
-     "Graphics, emulator, controls, saving and cheats. tab moves between the pages.", 5),
+     "Graphics, emulator, controls, saving and cheats. Left/right turn the pages.", 5),
     action_option(menu_save_manager, NULL, "Save manager",
      "This game's in-game save and states: compress, uncompress or delete them.", 6),
     action_option(menu_rom_manager, NULL, "ROM manager",
@@ -2754,6 +2760,16 @@ u32 menu(u16 *original_screen)
     snprintf(out, size, "%.*s", colon ? (int)(colon - display) : (int)strlen(display), display);
   }
 
+  /* A two-way line (off/on): enter flips it. */
+  int option_is_switch(menu_option_type *o)
+  {
+    const char *const *names = (const char *const *)o->options;
+    return (o->option_type & STRING_SELECTION_OPTION) && o->num_options == 2 &&
+     ((!strcmp(names[0], "off") && !strcmp(names[1], "on")) ||
+      (!strcmp(names[0], "disabled") && !strcmp(names[1], "enabled")) ||
+      (!strcmp(names[0], "no") && !strcmp(names[1], "yes")));
+  }
+
   void row_value(menu_option_type *o, struct ui_row *row)
   {
     if(o->option_type & NUMBER_SELECTION_OPTION)
@@ -2765,10 +2781,7 @@ u32 menu(u16 *original_screen)
     {
       const char *const *names = (const char *const *)o->options;
       u32 picked = *o->current_option;
-      if(o->num_options == 2 &&
-       ((!strcmp(names[0], "off") && !strcmp(names[1], "on")) ||
-        (!strcmp(names[0], "disabled") && !strcmp(names[1], "enabled")) ||
-        (!strcmp(names[0], "no") && !strcmp(names[1], "yes"))))
+      if(option_is_switch(o))
       {
         row->kind = UI_ROW_SWITCH;
         row->on = picked == 1;
@@ -2855,6 +2868,7 @@ u32 menu(u16 *original_screen)
     view.picked = 0;
     view.status = menu_status;
     view.capturing = capturing;
+    view.editing = editing;
     view.about = current_menu == &about_menu;
     view.no_game = first_load;
     view.picture = NULL;
@@ -2952,6 +2966,7 @@ u32 menu(u16 *original_screen)
     current_option = new_menu->options;
     current_option_num = 0;
 #if defined(NSPIRE_LIBRETRO)
+    editing = 0;
     if(option_hidden(current_option))
     {
       current_option_num = next_visible(0, 1);
@@ -3185,14 +3200,70 @@ u32 menu(u16 *original_screen)
       gui_action = CURSOR_EXIT;
 #endif
 #if defined(NSPIRE_LIBRETRO)
-    /* tab (shift+tab back) turns the settings pages */
-    if(key_pressed(KEY_TAB) && settings_page_of(current_menu) >= 0)
+    if(settings_page_of(current_menu) >= 0)
     {
-      int page = settings_page_of(current_menu);
-      page = (page + (key_down(KEY_SHIFT) ? settings_count - 1 : 1)) % settings_count;
-      menu_status[0] = 0;
-      choose_menu(settings_pages[page]);
-      continue;
+      int page = settings_page_of(current_menu), turn = 0;
+      int keys = (current_option->option_type & KEY_BINDING_OPTION) != 0;
+      int pick = (current_option->option_type & (NUMBER_SELECTION_OPTION |
+       STRING_SELECTION_OPTION)) != 0;
+
+      /* tab (shift+tab back), or left/right when no line is picked, turn
+       * the pages (once per press: holding doesn't fly through them) */
+      if(key_pressed(KEY_TAB))
+        turn = key_down(KEY_SHIFT) ? -1 : 1;
+      else if(!editing && (gui_action == CURSOR_LEFT || gui_action == CURSOR_RIGHT))
+      {
+        if(gui_repeat_count())
+          continue;
+        turn = gui_action == CURSOR_RIGHT ? 1 : -1;
+      }
+      if(turn)
+      {
+        page = (page + settings_count + turn) % settings_count;
+        menu_status[0] = 0;
+        choose_menu(settings_pages[page]);
+        continue;
+      }
+
+      if(!editing && gui_action == CURSOR_SELECT && (pick || keys))
+      {
+        if(option_is_switch(current_option))
+        {
+          *current_option->current_option ^= 1;
+          if(current_option->passive_function)
+            current_option->passive_function();
+          continue;
+        }
+        editing = 1;
+        key_column = 0;
+        edit_from = pick ? *current_option->current_option : 0;
+        continue;
+      }
+      if(!editing && gui_action == CURSOR_CLEAR)
+        continue;
+      if(editing)
+      {
+        if(gui_action == CURSOR_EXIT)
+        {
+          /* esc: a value goes back to what it was; keys stay as set */
+          if(pick && *current_option->current_option != edit_from)
+          {
+            *current_option->current_option = edit_from;
+            if(current_option->passive_function)
+              current_option->passive_function();
+          }
+          editing = 0;
+          continue;
+        }
+        if(gui_action == CURSOR_SELECT && !keys)
+        {
+          editing = 0;
+          continue;
+        }
+        /* up/down keep the value and move on */
+        if(gui_action == CURSOR_UP || gui_action == CURSOR_DOWN)
+          editing = 0;
+      }
     }
 #endif
 

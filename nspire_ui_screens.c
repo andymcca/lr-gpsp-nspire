@@ -497,12 +497,15 @@ static void about_page(void)
 
 static void settings_page(const struct ui_menu_view *v)
 {
-  static const char *const keys_pick[] = { "tab", "Next page", UI_ARROW_L " " UI_ARROW_R, "Change", "esc",
-                                           "Back" };
-  static const char *const keys_action[] = { "tab", "Next page", "enter", "Do it", "esc", "Back" };
+  static const char *const keys_pick[] = { UI_ARROW_L " " UI_ARROW_R, "Page", "enter", "Change", "esc", "Back" };
+  static const char *const keys_editing[] = { UI_ARROW_L " " UI_ARROW_R, "Change", "enter", "Keep", "esc",
+                                              "Cancel" };
+  static const char *const keys_switch[] = { UI_ARROW_L " " UI_ARROW_R, "Page", "enter", "Switch", "esc",
+                                             "Back" };
+  static const char *const keys_action[] = { UI_ARROW_L " " UI_ARROW_R, "Page", "enter", "Do it", "esc", "Back" };
   static const char *const keys_keys[] = { "enter", "Set", "del", "Clear", UI_ARROW_L " " UI_ARROW_R,
-                                           "Key 1 / 2", "esc", "Back" };
-  static const char *const keys_about[] = { "tab", "Next page", "esc", "Back" };
+                                           "Key 1 / 2", "esc", "Done" };
+  static const char *const keys_about[] = { UI_ARROW_L " " UI_ARROW_R, "Page", "esc", "Back" };
   int i, y = S_Y, first = 0;
   char fit[160];
 
@@ -546,19 +549,23 @@ static void settings_page(const struct ui_menu_view *v)
       break;
     case UI_ROW_PICK:
       ui_fit(row->value, &ui_font_small, 110, fit, sizeof(fit));
-      if (picked)
+      if (picked && v->editing)
       {
+        /* being changed: the value in the accent, between arrows */
         int w = ui_text_width(fit, &ui_font_small);
-        ui_text_right(UI_W - 34, y + 13, fit, &ui_font_small, UI_INK);
-        ui_chevrons(UI_W - 34 - w - 11, UI_W - 22, y + 4, UI_INK);
+        ui_rrect(UI_W - 34 - w - 17, y + 2, w + 35, S_RH - 5, 4, UI_ACCENT);
+        ui_text_right(UI_W - 34, y + 13, fit, &ui_font_small, UI_TEXT);
+        ui_chevrons(UI_W - 34 - w - 11, UI_W - 22, y + 4, UI_TEXT);
       }
+      else if (picked)
+        ui_text_right(UI_W - 22, y + 13, fit, &ui_font_small, UI_INK);
       else
         ui_text_right(UI_W - 22, y + 13, fit, &ui_font_small, UI_TEXT2);
       break;
     case UI_ROW_KEYS:
-      key_value(UI_W - 168, y, row->value, picked, picked && row->key_column == 0,
+      key_value(UI_W - 168, y, row->value, picked, picked && v->editing && row->key_column == 0,
                 picked && row->key_column == 0 && v->capturing);
-      key_value(UI_W - 92, y, row->value2, picked, picked && row->key_column == 1,
+      key_value(UI_W - 92, y, row->value2, picked, picked && v->editing && row->key_column == 1,
                 picked && row->key_column == 1 && v->capturing);
       break;
     default:
@@ -572,12 +579,21 @@ static void settings_page(const struct ui_menu_view *v)
   else if (v->help)
     ui_wrap(14, S_HELP_Y, 14, UI_W - 28, 3, v->help, &ui_font_small, UI_TEXT3);
 
-  if (v->count && v->rows[v->picked].kind == UI_ROW_KEYS)
-    ui_footer(keys_keys, 4);
-  else if (v->count && (v->rows[v->picked].kind == UI_ROW_ACTION || v->rows[v->picked].kind == UI_ROW_SUBMENU))
+  if (!v->count)
+    ui_footer(keys_about, 2);
+  else if (v->rows[v->picked].kind == UI_ROW_KEYS)
+  {
+    if (v->editing)
+      ui_footer(keys_keys, 4);
+    else
+      ui_footer(keys_pick, 3);
+  }
+  else if (v->rows[v->picked].kind == UI_ROW_ACTION || v->rows[v->picked].kind == UI_ROW_SUBMENU)
     ui_footer(keys_action, 3);
+  else if (v->rows[v->picked].kind == UI_ROW_SWITCH)
+    ui_footer(keys_switch, 3);
   else
-    ui_footer(keys_pick, 3);
+    ui_footer(v->editing ? keys_editing : keys_pick, 3);
 }
 
 void ui_menu_draw(const struct ui_menu_view *v)

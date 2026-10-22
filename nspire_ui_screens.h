@@ -130,6 +130,7 @@ struct ui_menu_view
   const char *help;             /* the picked line's ('\n' is a space) */
   const char *status;           /* what the last action did, or "" */
   int capturing;                /* waiting for a key (Controls) */
+  int editing;                  /* the picked line is being changed */
   int about;                    /* the About page: credits, no rows */
   /* main menu: the picture beside it, and what it is */
   int no_game;
