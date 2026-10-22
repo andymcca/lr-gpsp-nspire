@@ -2559,7 +2559,7 @@ inline static ramtag_type* get_ram_tag(u16 tagval) {
 
 
 #define block_lookup_translate_builder(type)                                  \
-u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
+NSPIRE_HOT u8 function_cc *block_lookup_translate_##type(u32 pc)              \
 {                                                                             \
   u8 pcregion = (pc >> 24);                                                   \
   u16 *location;                                                              \
@@ -2662,6 +2662,37 @@ u8 function_cc *block_lookup_address_dual(u32 pc)
   }
 }
 
+#ifdef NSPIRE_BUILD
+/* The blocks last found at ROM and BIOS addresses, which arm_stub.S's
+ * branches look up first (cached_lookup): the hash table behind
+ * block_lookup_address_* is 256 KB, so nearly every lookup there missed the
+ * 8 KB data cache, and games look blocks up at every return from a
+ * function and every interrupt. Key: the PC, Thumb ones with bit 0 set;
+ * entry (key >> 1) & 255. Translated RAM code isn't kept here, any write
+ * can take it away. Emptied with the ROM cache (keys ~0: no PC). */
+#define BLOCK_CACHE_SIZE 256
+u32 nspire_block_cache[BLOCK_CACHE_SIZE][2] __attribute__((aligned(32)));
+
+static void block_cache_clear(void)
+{
+  unsigned i;
+  for (i = 0; i < BLOCK_CACHE_SIZE; i++)
+    nspire_block_cache[i][0] = ~0U;
+}
+
+static inline void block_cache_put(u32 key, u8 *block)
+{
+  u32 *entry = nspire_block_cache[(key >> 1) & (BLOCK_CACHE_SIZE - 1)];
+  if ((key >> 24) - 2 < 2 || key >= 0x0E000000)   /* RAM, or no ROM */
+    return;
+  entry[0] = key;
+  entry[1] = (u32)block;
+}
+#else
+#define block_cache_clear()
+#define block_cache_put(key, block)
+#endif
+
 #ifdef NSPIRE_LIBRETRO
 /* arm_stub.S: back to whatever called execute_arm_translate. */
 extern u8 arm_return_to_main[];
@@ -2678,7 +2709,7 @@ static u8 *nspire_stop_at(u32 pc)
 }
 #endif
 
-u8 function_cc *block_lookup_address_arm(u32 pc)
+NSPIRE_HOT u8 function_cc *block_lookup_address_arm(u32 pc)
 {
   unsigned i;
   for (i = 0; i < 4; i++) {
@@ -2689,6 +2720,7 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
         return nspire_stop_at(pc & ~3);
 #endif
       translate_icache_sync();
+      block_cache_put(pc & ~3, ret);
       return ret;
     }
   }
@@ -2702,7 +2734,7 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
 #endif
 }
 
-u8 function_cc *block_lookup_address_thumb(u32 pc)
+NSPIRE_HOT u8 function_cc *block_lookup_address_thumb(u32 pc)
 {
   unsigned i;
   for (i = 0; i < 4; i++) {
@@ -2713,6 +2745,7 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
         return nspire_stop_at(pc & ~1);
 #endif
       translate_icache_sync();
+      block_cache_put((pc & ~1) | 1, ret);
       return ret;
     }
   }
@@ -3503,6 +3536,7 @@ void flush_translation_cache_rom(void)
   rom_translation_ptr      = &rom_translation_cache[rom_cache_watermark];
 
   memset(rom_branch_hash, 0, sizeof(rom_branch_hash));
+  block_cache_clear();
 #ifdef NSPIRE_LIBRETRO
   {
     u8 *rom_jit_lo = &rom_translation_cache[rom_cache_watermark];
@@ -3517,6 +3551,7 @@ void init_dynarec_caches(void)
   /* Initialize caches so that we can start initalizing the emitter. */
   rom_translation_ptr = last_rom_translation_ptr = &rom_translation_cache[0];
   memset(rom_branch_hash, 0, sizeof(rom_branch_hash));
+  block_cache_clear();
 
   ram_translation_ptr = last_ram_translation_ptr = &ram_translation_cache[0];
   memset(iwram, 0, 0x8000);

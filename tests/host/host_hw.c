@@ -41,7 +41,8 @@
  *
  * The report's shot and note lines give the game's frame count (the 32-bit
  * number at 0x02000000, where the test ROM keeps it), how many different
- * pictures the LCD has shown, the backlight, and the ROM being played. */
+ * pictures the LCD has shown, the backlight, the menu screen on show and
+ * its picked line (nspire_ui.h's ui_shown), and the ROM being played. */
 
 #include <errno.h>
 #include <math.h>
@@ -123,13 +124,16 @@ static const char *game_name(void)
   return gamepak_filename[0] ? (slash ? slash + 1 : gamepak_filename) : "-";
 }
 
+/* The menus' screen on show (nspire_ui.h). */
+extern char ui_shown[32];
+
 static void add_note(const char *kind, const char *name)
 {
   unsigned frame = ewram[0] | (ewram[1] << 8) | (ewram[2] << 16) | ((unsigned)ewram[3] << 24);
   if (num_notes < (int)(sizeof(notes) / sizeof(notes[0])))
     snprintf(notes[num_notes++], sizeof(notes[0]),
-             "%s %s frame=%u time=%.3f shown=%ld backlight=%u game=%s", kind, name, frame,
-             now / TICK_HZ, distinct_frames, (unsigned)backlight, game_name());
+             "%s %s frame=%u time=%.3f shown=%ld backlight=%u ui=%s game=%s", kind, name, frame,
+             now / TICK_HZ, distinct_frames, (unsigned)backlight, ui_shown, game_name());
 }
 
 static uint64_t hash_bytes(const void *data, size_t size)
@@ -457,16 +461,16 @@ int __wrap_zip_read(struct zip_rom *zip, uint8_t *dst, uint32_t n)
 
 /* The blended pictures cost what turning as many pixels does (roughly so
  * on the calculator, tests/arm and nspire_blend.c). */
-void __real_nspire_blend_turn_aspect(uint16_t *dst, const uint16_t *src, uint16_t *prev);
-void __real_nspire_blend_turn_full(uint16_t *dst, const uint16_t *src, uint16_t *prev);
+void __real_nspire_blend_turn_aspect(uint16_t *dst, const uint16_t *src, const uint16_t *prev);
+void __real_nspire_blend_turn_full(uint16_t *dst, const uint16_t *src, const uint16_t *prev);
 
-void __wrap_nspire_blend_turn_aspect(uint16_t *dst, const uint16_t *src, uint16_t *prev)
+void __wrap_nspire_blend_turn_aspect(uint16_t *dst, const uint16_t *src, const uint16_t *prev)
 {
   __real_nspire_blend_turn_aspect(dst, src, prev);
   turn_cost(320 * 216);
 }
 
-void __wrap_nspire_blend_turn_full(uint16_t *dst, const uint16_t *src, uint16_t *prev)
+void __wrap_nspire_blend_turn_full(uint16_t *dst, const uint16_t *src, const uint16_t *prev)
 {
   __real_nspire_blend_turn_full(dst, src, prev);
   turn_cost(320 * 240);

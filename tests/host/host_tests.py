@@ -31,7 +31,6 @@ cost turn 3
 cost touchpad 0.4
 """
 
-WHITE = (248, 252, 248)   # the menus' active item, as the LCD shows it
 BLACK = (0, 0, 0)
 
 failures = []
@@ -92,10 +91,28 @@ def qol1_config(scale, cpu):
     return o
 
 
+def owner_config():
+    """The owner's gpsp_qol.cfg.tns, as read off the calculator on
+    2026-10-14 (QOL3): scaled/blended 3:2, interframe blending, frameskip
+    off, no sprite limit, video.cc, Partial SMC, 16 MB ROM buffer, the FPS
+    counter on, brightness 9, gpSP's default keys."""
+    keys = [0x67, 0x57, 0x28, 0x24, 0x5a, 0x52, 0x5b, 0x64, 0x79, 0x7a, 0x66, 0x41, 0x31, 0x17, 0x22]
+    o = [1, 1, 0, 0, 1, 0, 4] + keys + [0, 1, 2, 1, 0xFF000000, 0, 1, 1, 1, 16, 0, 1, 0, 0, 0, 0x334C4F51]
+    o += keys + [0, 0x54, 0x56, 0, 0]          # actions 0-19: ) and ( for the slots
+    o += [0, 1, 1, 0, 1, 9, 0x63, 0x53, 1] + [0] * 5
+    assert len(o) == 72
+    return o
+
+
 # ---- Screenshots ----
 
 class Shot:
-    def __init__(self, path):
+    def __init__(self, path, ui=""):
+        """ui: the menus' screen on show and its picked line, "main:2"
+        (nspire_ui.h), or "" for anything else."""
+        self.ui = ui
+        self.screen, _, picked = ui.partition(":")
+        self.picked = int(picked) if picked else None
         data = open(path, "rb").read()
         header, self.pixels = data[:15], data[15:]
         assert header == b"P6\n320 240\n255\n", header
@@ -115,26 +132,48 @@ class Shot:
                 ys.append(y)
         return (min(xs), min(ys), max(xs), max(ys)) if xs else None
 
-    def white_rows(self, x0, x1, y0, y1):
-        return [y for y in range(y0, y1) if any(self.at(x, y) == WHITE for x in range(x0, x1))]
-
-    def active_menu_line(self):
-        """The highlighted line of a menu (gpSP draws line n at y = 40 + 10 n)."""
-        rows = self.white_rows(10, 316, 40, 205)
-        lines = sorted(set((y - 40) // 10 for y in rows))
-        return lines[0] if len(lines) == 1 else lines
+    def active_menu_line(self, screen=None):
+        """The picked line of a menu, counting the lines it shows from 0
+        (the main menu's, or a settings page's: screen "Graphics"...);
+        None if that menu isn't on the screen."""
+        if self.screen in ("", "list", "folders") or (screen and self.screen != screen):
+            return None
+        return self.picked
 
     def active_list_row(self):
-        """The highlighted row of the file list (row n at y = 10 + 10 n)."""
-        rows = self.white_rows(5, 255, 10, 210)
-        lines = sorted(set((y - 10) // 10 for y in rows))
-        return lines[0] if len(lines) == 1 else lines
+        """The picked game of the game list, counting from the first."""
+        return self.picked if self.screen == "list" else None
 
     def bar_x(self):
         """The test ROM's white bar, in screen columns (None if not seen)."""
         y = 120
         xs = [x for x in range(self.w) if min(self.at(x, y)) >= 240]
         return xs[0] if xs else None
+
+
+# ---- The menus ----
+
+# The main menu's lines, as shown (counting from 0), and the settings pages
+# in the order tab goes through them.
+MAIN = {"resume": 0, "save": 1, "load": 2, "restart": 3, "settings": 4, "save_manager": 5,
+        "rom_manager": 6, "game_list": 7, "exit": 8}
+PAGES = ["Graphics", "Emulator", "Controls", "Saving", "About"]
+
+
+def to_main(line):
+    """Script lines: from the main menu's first line down to one."""
+    return "press down\n" * MAIN[line]
+
+
+def to_page(page):
+    """Script lines: from the main menu's first line to a settings page."""
+    return to_main("settings") + "press enter\nwait 0.3\n" + "press tab\n" * PAGES.index(page)
+
+
+def change(key, times=1):
+    """Script lines: changes a settings page's picked value (enter picks it,
+    left or right change it, enter keeps it)."""
+    return "press enter\n" + ("press %s\n" % key) * times + "press enter\n"
 
 
 # ---- Running gpSP ----
@@ -201,7 +240,7 @@ class Run:
         return self
 
     def shot(self, name):
-        return Shot(os.path.join(self.out, name + ".ppm"))
+        return Shot(os.path.join(self.out, name + ".ppm"), self.notes.get(name, {}).get("ui", ""))
 
     def file(self, name):
         return os.path.join(self.gba, name)
@@ -273,12 +312,12 @@ note later
 shot game
 quit
 """)
-    lines = [r.shot(n).active_menu_line() for n in ("m0", "m1", "m2", "m3")]
-    check(lines == [0, 1, 3, 1], "menu: the highlight moves 0 1 3 1: %s" % (lines,))
-    # From Emulator options (line 1), one step at once and then 15 a second
-    # after 0.4 s: Cheats (8), About (10) or Load new game (11).
-    held = r.shot("held").active_menu_line()
-    check(held in (8, 9, 10), "menu: a held arrow repeats: line %s" % (held,))
+    lines = [r.shot(n).active_menu_line("main") for n in ("m0", "m1", "m2", "m3")]
+    check(lines == [0, 1, 2, 1], "menu: the highlight moves 0 1 2 1: %s" % (lines,))
+    # From Save state (line 1), one step at once and then 15 a second after
+    # 0.4 s: ROM manager (6), Game list (7) or Exit gpSP (8).
+    held = r.shot("held").active_menu_line("main")
+    check(held in (6, 7, 8), "menu: a held arrow repeats: line %s" % (held,))
     check(r.notes["later"]["frame"] - r.notes["back"]["frame"] >= 55, "menu: the game carries on after it")
     check(r.shot("game").box() == (0, 13, 319, 226), "menu: the picture is back whole")
 
@@ -341,12 +380,7 @@ press enter
 wait 2
 press menu
 wait 0.3
-press enter
-wait 0.3
-press left
-press left
-press left
-wait 0.3
+""" + to_page("Graphics") + change("left", 3) + """wait 0.3
 shot option
 press esc
 press esc
@@ -366,6 +400,77 @@ shot game
 quit
 """)
     check(again.shot("game").box() == (40, 40, 279, 199), "unscaled: kept for the next start")
+
+
+def test_settings_select_first():
+    """On the settings pages left and right turn the pages; a value changes
+    only after enter picks it (then left/right change it, enter keeps it,
+    esc puts it back). A key line takes enter before left/right pick its
+    key."""
+    r = Run("select_first").run("""
+wait 1
+press enter
+wait 2
+press menu
+wait 0.3
+""" + to_page("Graphics") + """press right
+wait 0.2
+shot right
+press left
+wait 0.2
+shot left
+press left
+wait 0.2
+shot wrapped
+press right
+press enter
+press left
+press left
+press left
+wait 0.2
+shot editing
+press right
+wait 0.2
+shot still_editing
+press esc
+wait 0.2
+shot cancelled
+press esc
+press esc
+wait 2.5
+shot game
+press menu
+wait 0.3
+""" + to_page("Controls") + """press enter
+press right
+wait 0.2
+shot key2
+press esc
+press right
+wait 0.2
+shot saving
+quit
+""")
+    def accent(shot):
+        """The accent's box behind a value being changed, on the first line."""
+        return any(shot.at(x, y)[2] > 200 and shot.at(x, y)[0] < 170 for y in range(34, 49) for x in range(180, 310))
+    check(r.shot("right").ui == "Emulator:0", "select first: right turns to Emulator: %s" % r.shot("right").ui)
+    check(r.shot("left").ui == "Graphics:0", "select first: left turns back: %s" % r.shot("left").ui)
+    check(r.shot("wrapped").ui == "About:0", "select first: left from the first page is the last: %s"
+          % r.shot("wrapped").ui)
+    check(not accent(r.shot("left")), "select first: nothing being changed before enter")
+    check(r.shot("editing").ui == "Graphics:0" and accent(r.shot("editing")),
+          "select first: enter picks the value, left changes it: %s" % r.shot("editing").ui)
+    check(r.shot("still_editing").ui == "Graphics:0", "select first: right changes it too, the page stays: %s"
+          % r.shot("still_editing").ui)
+    check(r.shot("cancelled").ui == "Graphics:0" and not accent(r.shot("cancelled")),
+          "select first: esc puts it back and stays on the page: %s" % r.shot("cancelled").ui)
+    check(r.shot("game").box() == (0, 13, 319, 226), "select first: the scaling as it was: %s"
+          % (r.shot("game").box(),))
+    check(r.shot("key2").ui == "Controls:0", "select first: on a picked key line right is its second key: %s"
+          % r.shot("key2").ui)
+    check(r.shot("saving").ui == "Saving:0", "select first: after esc, right turns the page: %s"
+          % r.shot("saving").ui)
 
 
 def test_brightness():
@@ -393,12 +498,7 @@ wait 0.3
 note down1
 press menu
 wait 0.3
-press enter
-wait 0.3
-press down
-press left
-press left
-wait 0.3
+""" + to_page("Graphics") + "press down\n" + change("left", 2) + """wait 0.3
 note menu_dimmer
 press esc
 press esc
@@ -721,7 +821,7 @@ wait 1
     for name in os.listdir(first.save("")):
         if name.startswith("gpsp_order"):
             shutil.copy(first.save(name), r.file("gpsp_order.txt.tns"))
-        elif name != "gpsp_romdir.tns":
+        elif name not in ("gpsp_romdir.tns", "gpsp_states_time.txt.tns"):   # not from older builds
             shutil.copy(first.save(name), r.file(name))
     shutil.copy(r.file("Bravo.gba0.svs.tns"), os.path.join(r.gba, "More", "Inner.gba4.svs.tns"))
     for name, text in (("gpsp.cfg.tns", "older build"), ("Game.gbc.sav.tns", "other emulator"),
@@ -782,7 +882,7 @@ def test_rom_manager():
     originals["Charlie"] = open(packed, "rb").read()
     subprocess.run([sys.executable, "-I", os.path.join(HERE, "..", "..", "tools", "gbz.py"), "pack", "-o", r.gba,
                     packed], check=True, capture_output=True)
-    open_manager = "press menu\nwait 0.3\n" + "press down\n" * 7 + "press enter\nwait 0.5\n"
+    open_manager = "press menu\nwait 0.3\n" + to_main("rom_manager") + "press enter\nwait 0.5\n"
     r.run("""wait 1
 press down
 press tab
@@ -1019,14 +1119,11 @@ press enter
 wait 1
 press menu
 wait 0.3
-press enter
-wait 0.3
-press up
-press up
+""" + to_page("Graphics") + """press up
 wait 0.3
 shot option
 press enter
-wait 23
+wait 28
 shot results
 press enter
 wait 1
@@ -1035,12 +1132,19 @@ wait 1
 note back
 quit
 """)
-    check(r.shot("option").active_menu_line() == 13, "speed test: on its line")
+    check(r.shot("option").active_menu_line("Graphics") == 10, "speed test: on its line, the last")
     path = r.save("gpsp_results.txt.tns")
     check(os.path.exists(path), "speed test: gpsp_results.txt written")
     if os.path.exists(path):
         text = open(path).read()
-        check("Normal play" in text and "nothing drawn" in text, "speed test: all three parts")
+        check("Normal play" in text and "nothing drawn" in text and "Fast forward" in text,
+              "speed test: all four parts")
+        ff = [l for l in text.split("\n") if l.startswith("Fast forward")]
+        part = text.split("Fast forward")[1] if ff else "game 0 fps, drawn 0;"
+        game = float(part.split("game ")[1].split(" fps")[0])
+        drawn = float(part.split("drawn ")[1].split(";")[0])
+        check(game > 70 and drawn >= 58, "speed test: fast forward faster than normal, a picture per refresh: "
+              "%.1f game frames, %.1f drawn" % (game, drawn))
 
 
 def test_hotkeys_in_menu_keys():
@@ -1051,27 +1155,21 @@ press enter
 wait 1
 press menu
 wait 0.3
-press down
-press down
-press down
-press down
-press down
-wait 0.2
-press enter
-wait 0.3
+""" + to_page("Controls") + """wait 0.3
 shot keys_top
 press up
 press up
 press up
 press up
-press up
 wait 0.3
-shot brighter
+shot brighter_line
+press enter
 press enter
 wait 0.2
 press 9
 wait 0.3
 shot changed
+press esc
 press esc
 press esc
 wait 0.5
@@ -1082,6 +1180,8 @@ press Q
 wait 1
 quit
 """)
+    check(r.shot("brighter_line").active_menu_line("Controls") == 20, "keys: on Brightness up, from the top "
+          "four lines up: %s" % r.shot("brighter_line").ui)
     check(r.notes["brighter"]["backlight"] < 120, "keys: 9 now makes it brighter: %d"
           % r.notes["brighter"]["backlight"])
 
@@ -1152,8 +1252,6 @@ press menu
 wait 0.3
 press up
 press up
-press up
-press up
 wait 0.2
 shot load_line
 press enter
@@ -1170,10 +1268,10 @@ press enter
 wait 1
 quit
 """)
-    check(r.shot("load_line").active_menu_line() == 11, "load: on Load new game")
+    check(r.shot("load_line").active_menu_line("main") == MAIN["game_list"], "load: on Game list")
     check(r.notes["bravo"]["game"] == "Bravo.gba.tns", "load: the other game runs")
     check(os.path.exists(r.save("Alpha.gba0.svs.tns")), "load: the first game was saved on leaving")
-    check(r.shot("exit_line").active_menu_line() == 15, "exit: on Exit gpSP")
+    check(r.shot("exit_line").active_menu_line("main") == MAIN["exit"], "exit: on Exit gpSP")
     check("quit" not in r.notes, "exit: gpSP closed by itself")
     check(os.path.exists(r.save("Bravo.gba0.svs.tns")), "exit: the game was saved")
     check(r.report["lcd_base_end"] == "os", "exit: the OS's screen back")
@@ -1211,16 +1309,13 @@ press enter
 wait 1
 press menu
 wait 0.3
-press enter
-wait 0.3
+""" + to_page("Graphics") + """press down
 press down
 press down
 press down
 press down
 press down
-press down
-press right
-wait 0.2
+""" + change("right") + """wait 0.2
 shot option
 press esc
 press esc
@@ -1240,9 +1335,160 @@ quit
     box = r.shot("counter").box(0, 12)
     check(box is not None and box[0] < 10, "fps: the counter is drawn at the top: %s" % (box,))
     ff = r.notes["ff_b"]["frame"] - r.notes["ff_a"]["frame"]
-    check(ff > 90, "fast forward: %d frames a second" % ff)
+    shown = r.notes["ff_b"]["shown"] - r.notes["ff_a"]["shown"]
+    # 14 ms a drawn frame: 60 pictures a second first, the game faster than
+    # normal with the rest of the time.
+    check(ff > 70, "fast forward: %d frames a second" % ff)
+    check(58 <= shown <= 61, "fast forward: %d pictures a second" % shown)
     box = r.shot("ff").box(0, 12)
     check(box is not None and box[2] < 60, "fast forward: the counter as drawn/expected, %s" % (box,))
+
+
+def test_fast_forward_pace():
+    """Fast forward with frameskip off (the owner's settings) or auto: the
+    game runs as fast as it can, and every LCD refresh gets a new picture
+    (60 a second; more would never be shown), unless that would hold the
+    game below its normal speed. The counter shows game frames against 60."""
+    def ff_run(name, costs, cfg=None):
+        return Run(name, files={"gpsp_qol.cfg.tns": cfg or owner_config()}).run(costs + """
+wait 1
+press enter
+wait 1
+note normal_a
+wait 2
+note normal_b
+press F
+wait 1
+note ff_a
+wait 2
+note ff_b
+shot counter
+press F
+wait 1
+note back_a
+wait 1
+note back_b
+quit
+""")
+
+    # A drawn frame takes 5 + 4 + 4 ms, a refresh 16.7: still a picture per
+    # refresh, and the game faster than normal in between.
+    heavy = ff_run("ff_heavy", "cost frame 5\ncost line 25\ncost turn 4.5\ncost touchpad 0.4\n")
+    n = heavy.notes
+    game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
+    shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
+    check(game >= 90, "fast forward, heavy game: %.1f game frames a second" % game)
+    check(58 <= shown <= 61, "fast forward, heavy game: %.1f pictures a second (one per refresh)" % shown)
+    normal = (n["normal_b"]["frame"] - n["normal_a"]["frame"]) / 2.0
+    check(58 <= normal <= 61, "fast forward, heavy game: normal speed before: %.1f" % normal)
+    back = n["back_b"]["frame"] - n["back_a"]["frame"]
+    check(57 <= back <= 61, "fast forward, heavy game: normal speed after: %d" % back)
+    box = heavy.shot("counter").box(0, 12)
+    check(box is not None and 20 < box[2] < 60, "fast forward: the counter, game frames/60: %s" % (box,))
+
+    # The owner's Advance Wars as the PC estimate has it (tests/speed_scenes.sh,
+    # 2026-10-16: 6.1 ms running a frame, 4.1 drawing, 4.0 for the picture):
+    # 60 pictures a second come first (the owner: "if the fps is above 60
+    # show 60 frames a second"), the game gets the rest of the time.
+    aw = ff_run("ff_advance_wars", "cost frame 6.1\ncost line 25.5\ncost turn 4.0\ncost touchpad 0.4\n")
+    n = aw.notes
+    game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
+    shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
+    check(game >= 75, "fast forward, Advance Wars' costs: %.1f game frames a second" % game)
+    check(58 <= shown <= 61, "fast forward, Advance Wars' costs: %.1f pictures a second" % shown)
+
+    # Too heavy for 60 pictures at 60 game frames a second (7 + 4.8 + 6 ms a
+    # drawn frame): pictures make way, only as far as it takes to keep the
+    # game at its normal speed.
+    over = ff_run("ff_too_heavy", "cost frame 7\ncost line 30\ncost turn 6\ncost touchpad 0.4\n")
+    n = over.notes
+    game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
+    shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
+    check(game >= 57, "fast forward, too heavy for 60 pictures: %.1f game frames a second" % game)
+    check(30 <= shown < 58, "fast forward, too heavy for 60 pictures: %.1f pictures a second" % shown)
+
+    # Auto frameskip: a picture per refresh too (one in 5 before).
+    cfg = owner_config()
+    cfg[24] = 0   # auto
+    auto = ff_run("ff_auto_frameskip", "cost frame 5\ncost line 25\ncost turn 4.5\ncost touchpad 0.4\n", cfg)
+    n = auto.notes
+    game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
+    shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
+    check(game >= 90, "fast forward, auto frameskip: %.1f game frames a second" % game)
+    check(58 <= shown <= 61, "fast forward, auto frameskip: %.1f pictures a second" % shown)
+
+    # A light game: as fast as it goes, but no more than a picture per refresh.
+    light = ff_run("ff_light", "cost frame 2\ncost line 10\ncost turn 2\ncost touchpad 0.4\n")
+    n = light.notes
+    game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
+    shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
+    check(game >= 250, "fast forward, light game: %.1f game frames a second" % game)
+    check(58 <= shown <= 61, "fast forward, light game: %.1f pictures a second (one per refresh)" % shown)
+
+
+def test_fast_forward_max_speed():
+    """Graphics > Fast forward max speed: 1.1x to 10.0x in tenths, then
+    unlimited (the default). Fast forward holds the speed chosen (waiting
+    when it's ahead), normal play is untouched, and the menu's choice is
+    saved (settings word 67: tenths, 0 for unlimited). A speed the game
+    can't reach is only a cap: it runs as fast as it can with every picture
+    the LCD shows drawn (no pictures left out to reach it)."""
+    def limited(name, tenths, costs="cost frame 2\ncost line 10\ncost turn 2\n"):
+        cfg = owner_config()
+        cfg[67] = tenths
+        return Run(name, files={"gpsp_qol.cfg.tns": cfg}).run(costs + """cost touchpad 0.4
+wait 1
+press enter
+wait 1
+note normal_a
+wait 2
+note normal_b
+press F
+wait 1
+note ff_a
+wait 2
+note ff_b
+quit
+""")
+
+    for tenths, low, high in ((15, 88, 91), (11, 64.5, 67), (30, 177, 181)):
+        r = limited("ff_max_%d" % tenths, tenths)
+        n = r.notes
+        game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
+        shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
+        normal = (n["normal_b"]["frame"] - n["normal_a"]["frame"]) / 2.0
+        check(low <= game <= high, "fast forward max %d.%dx: %.1f game frames a second" % (tenths // 10, tenths % 10, game))
+        check(58 <= shown <= 61, "fast forward max %d.%dx: %.1f pictures a second" % (tenths // 10, tenths % 10, shown))
+        check(58 <= normal <= 61, "fast forward max %d.%dx: normal play %.1f" % (tenths // 10, tenths % 10, normal))
+
+    # 3.0x out of reach (5 ms a frame running, 8 more drawing): pictures
+    # aren't left out for it, so it draws one per refresh, as fast as that
+    # leaves room for.
+    r = limited("ff_max_unreachable", 30, "cost frame 5\ncost line 25\ncost turn 4.5\n")
+    n = r.notes
+    game = (n["ff_b"]["frame"] - n["ff_a"]["frame"]) / 2.0
+    shown = (n["ff_b"]["shown"] - n["ff_a"]["shown"]) / 2.0
+    check(58 <= shown <= 61, "fast forward max 3.0x out of reach: %.1f pictures a second (all the LCD shows)" % shown)
+    check(85 <= game < 179, "fast forward max 3.0x out of reach: %.1f game frames a second" % game)
+
+    # The menu: Graphics, the tenth line; left from unlimited is 10.0x.
+    r = Run("ff_max_menu", files={"gpsp_qol.cfg.tns": owner_config()}).run("""wait 1
+press enter
+wait 1
+press menu
+wait 0.3
+""" + to_page("Graphics") + "press down\n" * 9 + """wait 0.2
+shot unlimited
+""" + change("left") + """wait 0.2
+shot ten
+press esc
+press esc
+wait 1
+quit
+""")
+    check(r.shot("unlimited").active_menu_line("Graphics") == 9, "fast forward max speed: on Graphics' tenth line")
+    words = read_words(r.save("gpsp_qol.cfg.tns"))
+    check(words[67] == 100, "fast forward max speed: 10.0x saved as 100 (word 67 is %d)" % words[67])
 
 
 def test_blended():
@@ -1259,19 +1505,11 @@ press enter
 wait 1
 press menu
 wait 0.3
-press enter
-wait 0.3
-press left
-press left
-""" + "press down\n" * 6 + """press right
-wait 0.2
+""" + to_page("Graphics") + change("left", 2) + "press down\n" * 6 + change("right") + """wait 0.2
 shot graphics
-press esc
+press tab
 wait 0.3
-press down
-press enter
-wait 0.3
-""" + "press down\n" * 5 + """press right
+""" + "press down\n" * 5 + """press enter
 wait 0.2
 shot emulator
 press esc
@@ -1286,10 +1524,7 @@ wait 0.5
 """ + three_shots("saved") + """wait 2.5
 """ + three_shots("after") + """press menu
 wait 0.3
-press enter
-wait 0.3
-press right
-press esc
+""" + to_page("Graphics") + change("right") + """press esc
 press esc
 wait 2
 shot full
@@ -1299,10 +1534,7 @@ shot full_saved
 wait 2.5
 """ + three_shots("full_after") + """press menu
 wait 0.3
-press enter
-wait 0.3
-press left
-press esc
+""" + to_page("Graphics") + change("left") + """press esc
 press esc
 wait 1.5
 """ + three_shots("back") + """press Q
@@ -1358,15 +1590,43 @@ wait 1.2
 shot loading
 wait 3
 shot game
+press S
+wait 1
 quit
 """)
     loading = r.shot("loading")
     back = loading.at(5, 5)
-    text = [x for y in range(80, 102) for x in range(320) if loading.at(x, y) != back]
-    check(text and min(text) == 30, "loading: \"Loading\" and the game's name from x 30")
-    left, right = loading.at(31, 113), loading.at(288, 113)
-    check(left != right, "loading: the bar is part way, %s %s" % (left, right))
+    check(loading.ui == "loading", "loading: the loading screen: %s" % loading.ui)
+    # No state to resume from, so no picture: "Loading", the game's name and
+    # the bar in the middle of the screen.
+    text = [x for y in range(76, 110) for x in range(320) if loading.at(x, y) != back]
+    check(text and abs(min(text) + max(text) - 320) <= 4, "loading: the name in the middle, x %s-%s"
+          % (min(text) if text else None, max(text) if text else None))
+    left, right = loading.at(81, 135), loading.at(238, 135)
+    check(left[2] > 200 and right[2] < 100, "loading: the bar is part way, %s %s" % (left, right))
     check(r.shot("game").box() == (0, 13, 319, 226), "loading: then the game")
+
+    # With a state to resume from, its picture above: clear of the text.
+    again = Run("loading2", reuse=r).run(REAL_COSTS + """cost read 600
+wait 1
+press enter
+wait 1.2
+shot loading
+quit
+""")
+    loading = again.shot("loading")
+    back = loading.at(5, 5)
+    rows = [y for y in range(240) if any(loading.at(x, y) != back for x in range(100, 220))]
+    bands = []
+    for y in rows:
+        if bands and y == bands[-1][1] + 1:
+            bands[-1][1] = y
+        else:
+            bands.append([y, y])
+    check(len(bands) >= 3 and bands[0][1] - bands[0][0] >= 90,
+          "loading: with a state, its picture on top: rows %s" % bands)
+    if len(bands) >= 2:
+        check(bands[1][0] - bands[0][1] >= 10, "loading: a gap between the picture and the text: rows %s" % bands)
 
 
 def test_zipped_game():
@@ -1433,12 +1693,14 @@ quit
     def text(y0, y1):
         return [stopped.at(x, y) for y in range(y0, y1) for x in range(320) if stopped.at(x, y) != back]
 
-    title_x = [x for y in range(78, 104) for x in range(320) if stopped.at(x, y) != back]
-    check(title_x and min(title_x) == 30, "damaged ROM: \"Stopped\" and the game's name from x 30")
-    why = text(108, 132)
-    check(any(p[0] > 200 and p[2] < 60 for p in why), "damaged ROM: it says why, in the error color")
-    check(text(148, 160), "damaged ROM: and to press a key")
-    check(not text(132, 146) and not text(162, 240), "damaged ROM: nothing else (no loading bar)")
+    check(stopped.ui == "stopped", "damaged ROM: the stopped screen: %s" % stopped.ui)
+    title = text(76, 110)
+    check(title, "damaged ROM: \"Stopped\" and the game's name")
+    why = text(110, 160)
+    check(any(p[0] > 200 and 120 < p[1] < 200 and p[2] < 120 for p in why),
+          "damaged ROM: it says why, in the warning color")
+    check(text(220, 236), "damaged ROM: and to press a key")
+    check(not text(160, 218), "damaged ROM: nothing else (no loading bar)")
     check(r.shot("list").active_list_row() == 0, "damaged ROM: then the file list")
     check(r.shot("game").box() == (0, 13, 319, 226), "damaged ROM: and another game starts")
     states = [f for f in os.listdir(os.path.join(r.dir, "zgpSP_saves")) if f.startswith("Damaged") and ".svs" in f]
@@ -1480,7 +1742,7 @@ wait 1
 """
     open_manager = """press menu
 wait 0.3
-""" + "press down\n" * 4 + """press enter
+""" + to_main("save_manager") + """press enter
 wait 0.5
 """
     r = Run("save_manager").run(REAL_COSTS + start + """press S
@@ -1522,36 +1784,40 @@ quit
 
 
 def test_every_menu_line():
-    """Every line of every menu: its help text fits the 3 lines under the
-    options (gui.c checks in the PC build and complains on stderr), and the
-    highlight is on it."""
-    lines = ["wait 1", "press enter", "wait 1.5", "press menu", "wait 0.3"]
-    menus = (("graphics", 0, 11, [2, 3, 5, 6, 7, 8, 9, 10, 11, 13, 15]),
-             ("emulator", 1, 9, [0, 2, 3, 4, 5, 6, 7, 9, 13]),
-             ("input", 5, 25, None),
-             ("cheats", 6, 16, list(range(10)) + [10, 11, 12, 13, 14, 15]))
-    for name, index, count, _ in menus:
-        lines += ["press down"] * index + ["press enter", "wait 0.3", "shot %s_00" % name]
+    """Every line of every settings page and of the main menu: the highlight
+    is on it, and its texts fit (the PC build complains on stderr about a
+    text cut short). tab goes through the pages and around; shift+tab
+    goes back."""
+    pages = (("Graphics", 11), ("Emulator", 8), ("Controls", 24), ("Saving", 5))
+    lines = ["wait 1", "press enter", "wait 1.5", "press menu", "wait 0.3", to_page("Graphics").strip()]
+    for name, count in pages:
+        lines.append("shot %s_00" % name)
         for i in range(1, count):
             lines += ["press down", "wait 0.15", "shot %s_%02d" % (name, i)]
-        lines += ["press esc", "wait 0.3"]
-    lines += ["press down"] * 8 + ["press enter", "wait 0.3", "shot about", "press esc", "wait 0.3"]
-    for i in range(13):
+        lines += ["press tab", "wait 0.3"]
+    lines += ["shot about", "press tab", "wait 0.3", "shot around",
+              "hold shift", "press tab", "release shift", "wait 0.3", "shot back",
+              "press esc", "wait 0.3", "shot out"]
+    for i in range(len(MAIN)):
         lines += ["shot main_%02d" % i, "press down", "wait 0.15"]
     lines.append("quit")
     r = Run("every_menu_line").run("\n".join(lines) + "\n")
-    for name, index, count, expected in menus:
-        if expected:
-            seen = [r.shot("%s_%02d" % (name, i)).active_menu_line() for i in range(count)]
-            check(seen == expected, "every menu line: %s highlights %s" % (name, seen))
-    main = [r.shot("main_%02d" % i).active_menu_line() for i in range(13)]
-    check(main == [0, 1, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 15], "every menu line: main highlights %s" % main)
+    for name, count in pages:
+        seen = [r.shot("%s_%02d" % (name, i)).active_menu_line(name) for i in range(count)]
+        check(seen == list(range(count)), "every menu line: %s highlights %s" % (name, seen))
+    check(r.shot("about").screen == "About", "every menu line: About after Saving: %s" % r.shot("about").ui)
+    check(r.shot("around").ui == "Graphics:0", "every menu line: then around to Graphics: %s" % r.shot("around").ui)
+    check(r.shot("back").screen == "About", "every menu line: shift+tab goes back: %s" % r.shot("back").ui)
+    check(r.shot("out").ui == "main:%d" % MAIN["settings"], "every menu line: esc, on Settings: %s"
+          % r.shot("out").ui)
+    main = [r.shot("main_%02d" % i).active_menu_line("main") for i in range(len(MAIN))]
+    seen = [(MAIN["settings"] + i) % len(MAIN) for i in range(len(MAIN))]
+    check(main == seen, "every menu line: main highlights %s" % main)
 
-
-TESTS = [test_play, test_menu, test_menu_slow_game, test_old_settings, test_unscaled_chosen,
+TESTS = [test_play, test_menu, test_menu_slow_game, test_old_settings, test_unscaled_chosen, test_settings_select_first,
          test_brightness, test_states, test_number_keys, test_move_and_sort, test_speed_test,
          test_hotkeys_in_menu_keys, test_folders, test_gbz, test_menu_load_and_exit, test_frameskip,
-         test_fps_counter_and_fast_forward, test_blended, test_loading_screen, test_zipped_game, test_damaged_rom,
+         test_fps_counter_and_fast_forward, test_fast_forward_pace, test_fast_forward_max_speed, test_blended, test_loading_screen, test_zipped_game, test_damaged_rom,
          test_slot_keys, test_save_manager, test_every_menu_line, test_states_from_older_builds,
          test_file_types, test_new_calculator, test_no_gba_folder, test_old_layout, test_old_saves_folder,
          test_rom_manager]

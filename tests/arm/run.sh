@@ -116,5 +116,71 @@ else
   echo "skipped: the damaged Advance Wars (not in $GBA_GAMES)"
 fi
 
+# Drawing in batches (video.h: lines drawn when the game next changes what
+# the picture is made of, or at VBlank) has to give the same frames as
+# drawing each line at its HBlank: every frame's hash, both renderers, from
+# the owner's states and from power-on through intros and title screens
+# (the games' own windows, blending, affine and mid-frame changes).
+# Each case: name, game, state (- for power-on), keys (-: none), frames,
+# draw (1 every frame, 2 every other one).
+batch_cases=(
+  "Advance Wars, the owner's name entry|Advance Wars (USA) (Rev 1).gba|aw_latest.svs.tns|-|600|1"
+  "Advance Wars, the owner's name entry, every other frame|Advance Wars (USA) (Rev 1).gba|aw_latest.svs.tns|-|600|2"
+  "Advance Wars from power-on|Advance Wars (USA) (Rev 1).gba|-|replay/boot.keys|2400|1"
+  "Emerald into the tall grass|Pokemon - Emerald Version (USA, Europe).gba|emerald_route_grass.svs.tns|replay/emerald_grass.keys|1900|1"
+  "Emerald from power-on|Pokemon - Emerald Version (USA, Europe).gba|-|replay/boot.keys|2400|1"
+  "Fire Emblem from power-on|Fire Emblem - The Sacred Stones (USA, Australia).gba|-|replay/boot.keys|2400|1"
+  "Golden Sun from power-on|Golden Sun (USA, Europe).gba|-|replay/boot.keys|2400|1"
+  "Minish Cap from power-on|Legend of Zelda, The - The Minish Cap (USA).gba|-|replay/boot.keys|2400|1"
+)
+batch_one() {   # index renderer batch (the links are made beforehand)
+  local IFS='|' f
+  read -r _ game state keys frames draw <<< "${batch_cases[$1]}"
+  f=build/batch/c$1-r$2
+  "$QEMU" -cpu arm926 build/perf $f.gba build/games/gba_bios.bin "$([ "$state" = - ] && echo - || echo $f.svs)" \
+    "$frames" "$keys" "$draw" renderer=$2 batch=$3 every=1 > $f-b$3.txt 2>&1 || echo "exit $?" >> $f-b$3.txt
+}
+if [ -f "$GBA_GAMES/gba_bios.bin" ]; then
+  mkdir -p build/batch build/games
+  ln -sf "$GBA_GAMES/gba_bios.bin" build/games/gba_bios.bin
+  export -f batch_one; export QEMU GBA_GAMES
+  jobs=()
+  for i in "${!batch_cases[@]}"; do
+    IFS='|' read -r name game state _ <<< "${batch_cases[$i]}"
+    if [ ! -f "$GBA_GAMES/$game" ] || { [ "$state" != - ] && [ ! -f "$GBA_GAMES/$state" ]; }; then
+      echo "skipped: batched drawing, $name (not in $GBA_GAMES)"
+      continue
+    fi
+    for r in 0 1; do
+      ln -sf "$GBA_GAMES/$game" build/batch/c$i-r$r.gba
+      [ "$state" = - ] || ln -sf "$GBA_GAMES/$state" build/batch/c$i-r$r.svs
+      for b in 0 1; do jobs+=("$i $r $b"); done
+    done
+  done
+  printf '%s\n' "${jobs[@]}" | (declare -p batch_cases > build/batch/cases.sh
+    xargs -P "$(nproc)" -L 1 bash -c '. build/batch/cases.sh; batch_one "$@"' _)
+  batch_failed=0 batch_runs=0
+  for i in "${!batch_cases[@]}"; do
+    IFS='|' read -r name _ _ _ frames _ <<< "${batch_cases[$i]}"
+    for r in 0 1; do
+      f=build/batch/c$i-r$r
+      [ -f $f-b1.txt ] || continue
+      batch_runs=$((batch_runs + 1))
+      renderer=$([ $r = 0 ] && echo video.cc || echo legacy)
+      if [ "$(grep -c '^frame' $f-b0.txt)" -lt "$frames" ] || grep -q '^exit\|stopped' $f-b0.txt; then
+        echo "FAIL  batched drawing, $name, $renderer: the run drawing each line didn't finish: $(tail -1 $f-b0.txt)"
+        batch_failed=$((batch_failed + 1))
+      elif ! cmp -s $f-b0.txt $f-b1.txt; then
+        echo "FAIL  batched drawing, $name, $renderer: frames differ from $(diff $f-b0.txt $f-b1.txt | sed -n 's/^> frame \([0-9]*\).*/\1/p' | head -1)"
+        batch_failed=$((batch_failed + 1))
+      fi
+    done
+  done
+  echo "$([ $batch_failed = 0 ] && echo PASS || echo FAIL): batched drawing: $((batch_runs - batch_failed)) of $batch_runs runs drew the same frames as line by line"
+  [ $batch_failed = 0 ] || failed=$((failed + 1))
+else
+  echo "skipped: batched drawing (no BIOS in $GBA_GAMES)"
+fi
+
 [ $failed = 0 ] && echo "ARM tests: all passed" || echo "ARM tests: $failed failed"
 [ $failed = 0 ]

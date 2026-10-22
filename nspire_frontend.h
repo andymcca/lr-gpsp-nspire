@@ -29,15 +29,19 @@ u32 nspire_draw_text(u16 *dst, u32 pitch, u32 x, u32 y, const char *text, u16 fg
 
 void nspire_present_frame(void);
 void nspire_video_mix_reset(void);
+/* Before a frame that will be drawn: with interframe blending on the
+ * blended pictures, the core draws into the other of two frame buffers, so
+ * the one drawn last stays as the previous frame (nothing is copied). */
+void nspire_video_frame_start(void);
 /* Something other than a game frame went into the screen buffers (a menu):
  * the text bands are drawn again. */
 void nspire_present_forget_bands(void);
 
 /* nspire_blend.c: the blended pictures, in one pass, turned (portrait LCDs).
- * src is 240x160, GBA_SCREEN_PITCH pixels a line; with prev, frames are
- * blended with the previous one (interframe blending), which prev holds. */
-void nspire_blend_turn_aspect(u16 *dst, const u16 *src, u16 *prev);
-void nspire_blend_turn_full(u16 *dst, const u16 *src, u16 *prev);
+ * src is 240x160, GBA_SCREEN_PITCH pixels a line; with prev (the previous
+ * frame, only read), frames are blended with it (interframe blending). */
+void nspire_blend_turn_aspect(u16 *dst, const u16 *src, const u16 *prev);
+void nspire_blend_turn_full(u16 *dst, const u16 *src, const u16 *prev);
 
 /* nspire_turn.c, besides the ones in nspire.h */
 void nspire_turn_1x(u16 *dst, const u16 *src, u32 src_pitch);

@@ -5,6 +5,7 @@
 #include "font.h"
 #include "nspire.h"
 #include "nspire_frontend.h"
+#include "nspire_ui.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -28,7 +29,8 @@ static u32 debug_cursor_x;
 static u32 debug_cursor_y;
 
 /* Portrait LCD: menus draw landscape into nspire_landscape, and
- * flip_screen turns it into the display buffer. */
+ * flip_screen turns it into the display buffer. Menus draw in 5:6:5, the
+ * LCD's (and the game's) own format. */
 static u16 *ui_screen(void)
 {
   return nspire_lcd_portrait ? nspire_landscape : (u16 *)nspire_screen;
@@ -99,28 +101,20 @@ void clear_screen(u16 color)
     *p++ = col;
 }
 
+/* The game's last frame, 240x160 in 5:6:5 (the menus' format too): the
+ * main menu shows it. */
 u16 *copy_screen(void)
 {
   static u16 copy[240 * 160];
   u32 row;
-  u16 *dst, *src;
 
-  if (nspire_lcd_portrait && gba_screen_pixels)
+  if (!gba_screen_pixels)
   {
-    /* The display buffers hold turned frames; take the game's own frame,
-     * in the menu's color format. */
-    u32 i;
-    for (i = 0; i < 240 * 160; i++)
-    {
-      u16 p = gba_screen_pixels[(i / 240) * GBA_SCREEN_PITCH + i % 240];
-      copy[i] = (u16)(((p & 0x1Fu) << 10) | (((p & 0x07C0u) >> 1) & 0x03E0u) | ((p >> 11) & 0x1Fu));
-    }
+    memset(copy, 0, sizeof(copy));
     return copy;
   }
-
-  for (row = 0, dst = copy, src = get_screen_pixels(); row < 160;
-       row++, dst += 240, src += get_screen_pitch())
-    memcpy(dst, src, 240 * 2);
+  for (row = 0; row < 160; row++)
+    memcpy(copy + row * 240, gba_screen_pixels + row * GBA_SCREEN_PITCH, 240 * 2);
   return copy;
 }
 
@@ -248,8 +242,21 @@ void print_string_pad(const char *str, u16 fg_color, u16 bg_color, u32 x, u32 y,
                    FONT_HEIGHT);
 }
 
+/* Menus draw in 5:6:5; a landscape LCD here runs in 1:5:5:5 with red in
+ * the low bits (gui.c's old color16). dst may be src. */
+static void to_landscape_lcd(u16 *dst, const u16 *src)
+{
+  u32 n = 320 * 240;
+  while (n--)
+  {
+    u32 c = *src++, g = (c >> 5) & 63;
+    *dst++ = (u16)(((g & 1) << 15) | ((c & 31) << 10) | ((g >> 1) << 5) | (c >> 11));
+  }
+}
+
 void flip_screen(void)
 {
+  ui_shown[0] = 0;
   if ((resolution_width == 240) && (resolution_height == 160))
   {
     if (screen_scale == fullscreen)
@@ -261,9 +268,24 @@ void flip_screen(void)
   }
   if (nspire_lcd_portrait)
   {
-    nspire_turn_rect_555(nspire_screen, nspire_landscape, 320, 0, 0, 320, 240);
+    nspire_turn_rect_565(nspire_screen, nspire_landscape, 320, 0, 0, 320, 240);
     nspire_present_forget_bands();
   }
+  else if (resolution_width == 320)
+    to_landscape_lcd(ui_screen(), ui_screen());
+  nspire_flip();
+  screen_pixels = ui_screen() + screen_offset;
+}
+
+void flip_screen_ui(void)
+{
+  if (nspire_lcd_portrait)
+  {
+    nspire_turn_rect_565(nspire_screen, nspire_landscape, 320, 0, 0, 320, 240);
+    nspire_present_forget_bands();
+  }
+  else
+    to_landscape_lcd((u16 *)nspire_screen, nspire_landscape);
   nspire_flip();
   screen_pixels = ui_screen() + screen_offset;
 }

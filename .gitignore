@@ -4,8 +4,12 @@ video.cc.asm
 
 # Build output
 *.o
+*.d
 *.elf
 *.tns
 tests/host/build/
 tests/arm/build/
 __pycache__/
+
+# tools/deploy.sh
+build/

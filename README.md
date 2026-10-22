@@ -104,9 +104,24 @@ picture is one line higher (lines 12-224), so each column's pixels are whole
 words. The FPS counter's and messages' text bands are only drawn again when
 their text changes.
 
+**The menus (new look, 2026-10).** Smooth type on a near-black screen, the
+picked line on a white bar, one violet accent for what's on. The game list
+shows the picked game's newest state as a picture, with its region, how many
+states it has and its file. The main menu opens over the paused game,
+blurred: *Resume*, *Save state*, *Load state* (left/right pick the slot; the
+picture beside it is that state's), *Restart*, then *Settings*, *Save
+manager*, *ROM manager*, then *Game list* and *Exit gpSP*. *Settings* are
+pages that **left/right** (or **tab**, **shift+tab** back) go through: *Graphics*,
+*Emulator*, *Controls* (the keys), *Saving* (save options, and cheats when a
+game has them) and *About*. To change a setting, **enter** picks it, then
+left/right change it and **enter** keeps it (**esc** puts it back); enter
+flips an on/off setting. **esc** goes back. New states keep a small
+picture of the game (after the state, so older builds still load them); the
+loading screen shows the one a game resumes from.
+
 **Brightness (CX II).** **+** and **-** make the screen brighter or dimmer, in
 games ("Brightness 7/10" shows at the bottom), menus and the file list.
-*Screen brightness* in Graphics options sets it too: *calculator's* (the
+*Screen brightness* (Settings, Graphics) sets it too: *calculator's* (the
 default) leaves the calculator's own brightness alone, 1 to 10 are gpSP's.
 When gpSP closes, the calculator's own brightness comes back. (It is the LCD
 backlight at 0x90130014, which the OS sets from 0, brightest, to 225,
@@ -121,24 +136,25 @@ A to Z again. A folder opens on its first game, and gpSP opens in the folder
 it was last in.
 
 **Save states.** Slots 0 to 999, named as before (`Game.gba12.svs.tns`, in
-`zgpSP_saves`), so older states still load. In *Cheats and Miscellaneous options*:
+`zgpSP_saves`), so older states still load. In Settings, *Saving*:
 
 | Setting | Default | |
 |---|---|---|
 | Auto-increment slot on save | on | every save goes to a new slot after the highest, so nothing is overwritten |
-| Save a state when leaving | on | Save+Exit, Exit gpSP and Load new game save first |
+| Save a state when leaving | on | Save+Exit, Exit gpSP and Game list save first |
 | Load newest state on start | on | starting a game resumes its newest state; **shift+enter** in the file list starts without it |
 
-In the main menu the slot lines say what they do ("Save state to new slot
-007", "Load state from slot: 005 (empty)"); hold left/right to move faster.
+In the main menu *Save state* shows the slot a save goes to (a new one with
+auto-increment) and *Load state* the slot picked, with its picture beside
+it; hold left/right to move faster.
 
 The newest state is the one this build saved last: its states count their
 saves, which stays right when a calculator reset restarts its clock. Until a
 game has one of this build's states (it has only older builds' or the first
 QoL build's), the newest is the most recently written file.
 
-**Smaller files.** With *Compress saves* on (Cheats and Miscellaneous
-options, the default, as in PocketSNES), states are zlib-compressed (gpSP's
+**Smaller files.** With *Compress saves* on (Settings, Saving; the
+default, as in PocketSNES), states are zlib-compressed (gpSP's
 states were 416 KB each) and in-game saves gzipped: `Game.gba.sav.gz.tns`,
 which a PC unpacks like any `.gz` (`gunzip`, 7-Zip). Off, new states are
 stored as they are and in-game saves are plain `.sav` files, which other
@@ -146,7 +162,7 @@ gpSP builds and PC emulators read. Writing a save removes its other form;
 loading takes the newer of the two. Older states still load.
 
 **Save manager** (main menu): the game's in-game save and states, with their
-sizes, compressed or not. **enter** marks files (**A**: all of them), **C**
+sizes, compressed or not, and the picked state's picture. **enter** marks files (**A**: all of them), **C**
 compresses and **U** uncompresses the marked ones (or the one picked), and
 **del** deletes them after asking (**del** again). A state keeps its place
 among the newest when it's compressed or uncompressed. A deleted in-game
@@ -170,8 +186,8 @@ CRC is checked; when the ROM buffer is smaller than the ROM, more memory is
 taken for it if there is any. Opening a `.zip.tns` from the calculator's
 documents isn't set up, as PocketSNES may have that file type.
 
-**Loading screen.** Starting a game shows its name and a bar while its ROM
-is read into memory (with a big ROM buffer, all of it: 16 MB takes a
+**Loading screen.** Starting a game shows its name (and the picture of the
+state it resumes from) and a bar while its ROM is read into memory (with a big ROM buffer, all of it: 16 MB takes a
 while), then the state it resumes from. A game that can't be loaded says
 why (no ROM in the zip, not enough memory...), and the file list comes back.
 
@@ -186,15 +202,15 @@ A `.gbz.tns` is read 32 KB at a time like a big `.gba` (`nspire_gbz.h` has the
 format) and shares the `.gba`'s saves, states and settings. Older gpSP builds
 can't read compressed states or ROMs.
 
-**Keys.** *Configure input* has two keys per action (left/right pick one,
-enter sets it, del clears it), key combinations (hold a key and press another),
+**Keys.** Settings, *Controls* has two keys per action (enter picks the
+line, left/right pick a key, enter sets it, del clears it), key combinations (hold a key and press another),
 and new hotkeys: brightness up and down (+ and -), next and previous save
 slot (**)** and **(**, as in PocketSNES; settings from before them get these
 keys where they're free), and, unbound at first, load newest state, FPS
 counter, restart game. Save, load and slot changes show a message on screen. The number pad's 7 9 1 3 are diagonals
 unless bound to something. esc goes back in menus, and held arrows repeat.
 
-**Per game.** *Settings for* (Emulator options) and *Keys for* (Configure input)
+**Per game.** *Settings for* (Settings, Emulator) and *Keys for* (Controls)
 can be "this game only": the game keeps its own graphics, emulator and save
 options or keys in `Game.gba.settings.tns` in `zgpSP_saves`.
 
@@ -206,13 +222,21 @@ start of this build takes them from `gpsp_qol.cfg.tns` next to gpSP (builds
 before), else from older builds' `gpsp.cfg.tns` (moved into `zgpSP_saves`,
 only read), and puts them into the program file right away.
 
-**Speed.** *Show FPS counter* (Graphics options): off, on ("58/60": frames drawn
-a second / the most there can be; in fast forward the same, against the 12
-it draws a second at normal speed, as in PocketSNES) or detailed (ms per frame running the game,
-drawing, showing, idle; logged to `gpsp_perf.txt.tns`). *Run speed test* runs
-the game from where it is for 20 seconds (normal play, no speed limit with every
-frame drawn, no limit with nothing drawn) and writes `gpsp_results.txt.tns`.
-*CPU speed (CX II)* in Emulator options: normal, or 408 to 504 MHz in 12 MHz
+**Speed.** *Show FPS counter* (Settings, Graphics): off, on ("58/60": frames drawn
+a second / the most there can be; in fast forward, game frames a second /
+60, so 2x reads "120/60") or detailed (ms per frame running the game,
+drawing, showing, idle; logged to `gpsp_perf.txt.tns`). *Fast forward max
+speed* (Graphics): 1.1x to 10.0x in steps of 0.1x, or unlimited
+(the default: as fast as the game runs). Fast forward never skips game
+frames; with frameskip off or auto every LCD refresh gets a new picture
+(60 a second), and the game runs as fast as the rest of the time allows.
+Only where drawing all 60 would hold the game below its normal speed are
+pictures left out, just enough to keep it there. A top speed is only a cap:
+a game that can't reach it runs as fast as it can, still drawing every
+picture. Manual frameskip draws one frame in five in fast forward. *Run speed test* runs the game from where it is for 25
+seconds (normal play, no speed limit with every frame drawn, no limit with
+nothing drawn, fast forward) and writes `gpsp_results.txt.tns`.
+*CPU speed (CX II)* (Settings, Emulator): normal, or 408 to 504 MHz in 12 MHz
 steps while a game runs (PocketSNES's clock switch and list). Try 432 first:
 on the calculator this was made on, 456 glitched now and then and 480 froze
 in PocketSNES. If a speed freezes the calculator, the next start goes back to
@@ -233,7 +257,7 @@ the data cache back and empties the instruction cache before using them
 (`nspire_sync_written_code`). Older builds got away with it by always opening
 the menu at the same stack address. The menu also no longer clears the
 screen buffer being shown, which made it flicker. Help texts fit the screen,
-and the second keys in *Configure input* line up.
+and the second keys in the key settings line up.
 
 ### PC tests
 
@@ -253,19 +277,26 @@ in `~/nspire/build/testroms/gba/gba-tests`):
   simulated LCD (which notices writes to the buffer being shown, i.e.
   tearing), 32 kHz timer, keypad, touchpad and backlight, with a script of
   key presses in virtual time and the calculator's costs for emulating,
-  drawing and turning frames. They check screenshots and a report: the
-  picture's size, the menu highlight moving with short presses, brightness,
+  drawing and turning frames. They check screenshots and a report (which
+  menu screen is shown and its picked line): the picture's size, the menu
+  highlight moving with short presses, the settings pages with tab,
+  brightness,
   states, number keys, moving and sorting games, folders, `.gbz` ROMs, auto
   frameskip, the FPS counter and fast forward, the speed test, the blended
   pictures with their text bands, the loading screen, zipped games and one
   that won't load, a damaged ROM that stops, the slot keys, the save
-  manager, and that every menu line's help fits. `python3
-  tests/host/host_tests.py menu` runs one.
+  manager, and that every menu line's text fits (the PC build says so when
+  a text is cut short). `python3 tests/host/host_tests.py menu` runs one.
+* `build/ui_preview OUTDIR GAME.ppm BATTLE.ppm` draws the menus' screens with
+  real games' pictures (240x160 P6 frames) exactly as the calculator draws
+  them, to look at the design.
 
 `tests/calc_checks.py` (needs the Ndless toolchain) checks the calculator
 build's disassembly for what a PC can't show: that `menu()` syncs the caches
-before its first trampoline call, and that video.cc's fill stores an odd
-first pixel alone before its 16-byte stores.
+before its first trampoline call, that video.cc's fill stores an odd
+first pixel alone before its 16-byte stores, that the code every interrupt
+runs is one stretch smaller than the instruction cache, and that IWRAM is
+where the dynarec's fast push/pop expects it.
 
 `tests/arm/run.sh` (needs the Ndless toolchain and qemu-arm) builds code for
 the calculator's CPU and runs it under qemu-arm: the one-pass blended
@@ -281,7 +312,16 @@ run (it has to stop there). With the game, its BIOS and a save state
 in `$GBA_GAMES` (see `tests/arm/run.sh`), Pokemon Emerald is played from the
 state into a wild battle with both renderers, both SMC settings, 8 and 32 MB
 ROM buffers and as a zip: all must reach the same battle frame for frame.
-A damaged Advance Wars there has to stop at its bad jump.
+A damaged Advance Wars there has to stop at its bad jump. Eight scenes
+(Advance Wars from the owner's state and from power-on, Emerald, Fire
+Emblem, Golden Sun, Minish Cap) are played with the picture's lines drawn
+in batches and line by line, with both renderers: every frame must be the
+same.
+
+`tests/speed_scenes.sh` estimates from the PC how fast those scenes run on
+the calculator (milliseconds a frame for the game, drawing and the
+picture), with `tests/calc_speed.sh`'s model of the ARM926; DEVNOTES.md
+("Speed") has the numbers.
 
 ## Releases
 

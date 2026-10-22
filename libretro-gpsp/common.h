@@ -199,6 +199,17 @@ typedef u32 fixed8_24;
 #define read_dmareg(regnum, dmachan) (eswap16(io_registers[(regnum) + (dmachan) * 6]))
 #define write_dmareg(regnum, dmachan, val) io_registers[(regnum) + (dmachan) * 6] = eswap16(val)
 
+#ifdef NSPIRE_BUILD
+/* What runs at every scanline event and interrupt (update_gba, the block
+ * lookups, mode switches, arm_stub.S's handlers...), kept together in one
+ * stretch of the program so its cache lines spread over all of the
+ * ARM926's 16 KB instruction cache: scattered, several landed on the same
+ * few cache sets and pushed each other out at every interrupt. */
+#define NSPIRE_HOT __attribute__((section(".text.hot.gpsp")))
+#else
+#define NSPIRE_HOT
+#endif
+
 #include <unistd.h>
 #include <time.h>
 #include <stdlib.h>

@@ -49,6 +49,8 @@
 #include "nspire_clock.h"
 #include "nspire_brightness.h"
 #include "nspire_game_list.h"
+#include "nspire_ui_screens.h"
+#include "nspire.h"
 #endif
 
 #if defined(NSPIRE_LIBRETRO)
@@ -69,7 +71,11 @@ static void nspire_clamp_rom_buffer_size(void)
 
 // Blatantly stolen and trimmed from MZX (megazeux.sourceforge.net)
 
-#if defined(GP2X_BUILD) || defined(NSPIRE_BUILD)
+#if defined(NSPIRE_LIBRETRO)
+
+#define FILE_LIST_ROWS UI_LIST_ROWS
+
+#elif defined(GP2X_BUILD) || defined(NSPIRE_BUILD)
 
 #define FILE_LIST_ROWS ((int)((SDL_SCREEN_HEIGHT - 40) / FONT_HEIGHT))
 #define FILE_LIST_POSITION 5
@@ -89,9 +95,10 @@ static void nspire_clamp_rom_buffer_size(void)
   (blue << 11) | (green << 5) | red                                           \
 
 #elif defined(NSPIRE_BUILD)
+/* 5:6:5, as the LCD (nspire_ui.h) */
 #define color16(red, green, blue)                                             \
-  ((green & 1) << 15) | (blue << 10) | ((green >> 1) << 5) | red 
-  
+  (((red) << 11) | ((green) << 5) | (blue))
+
 #else
 
 #define color16(red, green, blue)                                             \
@@ -114,7 +121,6 @@ static void nspire_clamp_rom_buffer_size(void)
 #define COLOR_INACTIVE_ITEM color16(13, 40, 18)
 #define COLOR_FRAMESKIP_BAR color16(15, 31, 31)
 #define COLOR_HELP_TEXT     color16(16, 40, 24)
-#define COLOR_MOVING        color16(31, 50, 4)
 
 #ifdef PSP_BUILD
   u8 *clock_speed_options[] =
@@ -188,6 +194,103 @@ int sort_function(const void *dest_str_ptr, const void *src_str_ptr)
   return strcasecmp(dest_str, src_str);
 }
 
+#if defined(NSPIRE_LIBRETRO)
+/* The picked game's details (its newest state's picture, how many states,
+ * the file's size) are looked up once it has stayed picked for a sixth of
+ * a second, so holding an arrow doesn't wait for files. */
+static struct ui_list_details list_details;
+static char list_details_file[256];
+static u32 list_picked_at;
+static int list_redraw;   /* a folder was just opened: draw it whatever */
+
+static void list_look_up(const char *dir, const char *file)
+{
+  static u16 picture[STATE_PIC_W * STATE_PIC_H];
+  char path[MAX_PATH + 256];
+  struct stat st;
+  size_t len = strlen(dir);
+
+  snprintf(path, sizeof(path), "%s%s%s", dir, len && dir[len - 1] == '/' ? "" : "/", file);
+  list_details.has_picture = states_peek(path, &list_details.states, &list_details.newest, picture);
+  if(list_details.has_picture)
+    ui_scale(list_details.picture, 120, 80, picture, STATE_PIC_W, STATE_PIC_H, STATE_PIC_W);
+  list_details.bytes = stat(path, &st) == 0 ? (long)st.st_size : 0;
+  list_details.ready = 1;
+}
+
+/* Draws the list when something on it changed. */
+static void list_draw(u8 **files, u32 num_files, const char *const *dirs, u32 num_dirs,
+ const char *dir_name, u32 column, s32 file_picked, s32 file_first, u32 dir_picked,
+ u32 dir_first, int moving, const char *status)
+{
+  static struct ui_list_view last;
+  static int last_ready;
+  static char last_status[80];
+  struct ui_list_view v;
+  const char *folder, *end;
+  char folder_name[64];
+  int r;
+
+  memset(&v, 0, sizeof(v));
+  /* the folder's own name: "/documents/gba/" -> "gba" */
+  end = dir_name + strlen(dir_name);
+  while(end > dir_name && end[-1] == '/')
+    end--;
+  folder = end;
+  while(folder > dir_name && folder[-1] != '/')
+    folder--;
+  snprintf(folder_name, sizeof(folder_name), "%.*s", (int)(end - folder), folder);
+  if(!strcasecmp(folder_name, "documents") || !folder_name[0])
+    snprintf(folder_name, sizeof(folder_name), "My Documents");
+  v.folder = folder_name;
+  v.games = (int)num_files;
+  v.first = file_first;
+  v.picked_row = v.marked_row = -1;
+  for(r = 0; r < UI_LIST_ROWS && file_first + r < (s32)num_files; r++)
+  {
+    v.rows[r].file = (const char *)files[file_first + r];
+    v.rows[r].number = file_first + r < 10 ? (file_first + r + 1) % 10 : -1;
+    if(file_first + r == file_picked)
+    {
+      if(column == 0)
+        v.picked_row = r;
+      else
+        v.marked_row = r;
+    }
+  }
+  v.moving = moving;
+  v.dirs = dirs;
+  v.dir_count = (int)num_dirs;
+  v.dir_first = (int)dir_first;
+  v.dir_picked = column == 1 ? (int)dir_picked : -1;
+  v.status = status;
+  v.details = &list_details;
+
+  if(column == 0 && file_picked < (s32)num_files)
+  {
+    const char *file = (const char *)files[file_picked];
+    if(strcmp(file, list_details_file))
+    {
+      snprintf(list_details_file, sizeof(list_details_file), "%s", file);
+      list_details.ready = 0;
+      list_picked_at = nspire_ticks();
+    }
+    else if(!list_details.ready && !moving &&
+     nspire_ticks() - list_picked_at >= NSPIRE_TICK_HZ / 6)
+      list_look_up(dir_name, file);
+  }
+
+  if(!list_redraw && !memcmp(&v, &last, sizeof(v)) && last_ready == list_details.ready &&
+   !strcmp(status, last_status))
+    return;
+  ui_list_draw(&v);
+  list_redraw = 0;
+  last = v;
+  last_ready = list_details.ready;
+  snprintf(last_status, sizeof(last_status), "%s", status);
+}
+#endif
+
 s32 load_file(u8 **wildcards, u8 *result)
 {
   DIR *current_dir;
@@ -251,6 +354,9 @@ s32 load_file(u8 **wildcards, u8 *result)
     chosen_dir = 0;
 
     getcwd(current_dir_name, MAX_PATH);
+#if defined(NSPIRE_LIBRETRO)
+    list_redraw = 1;
+#endif
 
     current_dir = opendir(current_dir_name);
 
@@ -384,12 +490,21 @@ s32 load_file(u8 **wildcards, u8 *result)
       current_column = 1;
 #endif
 
+#if !defined(NSPIRE_LIBRETRO)
     clear_screen(COLOR_BG);
+#endif
   {
     u8 print_buffer[81];
 
     while(repeat)
     {
+#if defined(NSPIRE_LIBRETRO)
+      update_at_vblank();
+      list_draw(file_list, num_files, (const char *const *)dir_list, num_dirs,
+       (char *)current_dir_name, current_column, current_file_selection,
+       current_file_scroll_value, current_dir_selection, current_dir_scroll_value,
+       moving >= 0, list_status);
+#else
       flip_screen();
 #ifdef NSPIRE_BUILD
 	  update_at_vblank();
@@ -403,21 +518,6 @@ s32 load_file(u8 **wildcards, u8 *result)
 #ifdef GP2X_BUILD
       print_string("Press X to return to the main menu.",
        COLOR_HELP_TEXT, COLOR_BG, 20, 220);
-#elif defined(NSPIRE_LIBRETRO)
-      if(moving >= 0)
-      {
-        print_string("Moving it: up/down, then enter to put it there,",
-         COLOR_HELP_TEXT, COLOR_BG, 20, 220);
-        print_string("or esc to put it back.", COLOR_HELP_TEXT, COLOR_BG, 20, 230);
-      }
-      else
-      {
-        print_string(list_status[0] ? list_status :
-         "enter or 1-9, 0: start  shift: without its state",
-         COLOR_HELP_TEXT, COLOR_BG, 20, 220);
-        print_string("tab: move a game  shift+tab: A to Z  menu: back",
-         COLOR_HELP_TEXT, COLOR_BG, 20, 230);
-      }
 #elif defined(NSPIRE_BUILD)
 	  print_string("Press menu to return to the main menu.",
        COLOR_HELP_TEXT, COLOR_BG, 20, 220);
@@ -431,23 +531,6 @@ s32 load_file(u8 **wildcards, u8 *result)
       {
         if(current_file_number < num_files)
         {
-#if defined(NSPIRE_LIBRETRO)
-          /* The first ten start with their number key, shown before them. */
-          char row[100];
-          u16 color = COLOR_INACTIVE_ITEM;
-
-          if((s32)current_file_number == moving)
-            color = COLOR_MOVING;
-          else if((current_file_number == current_file_selection) &&
-           (current_column == 0))
-            color = COLOR_ACTIVE_ITEM;
-          if(current_file_number < 10)
-            snprintf(row, sizeof(row), "%u %s", (current_file_number + 1) % 10,
-             (char *)file_list[current_file_number]);
-          else
-            snprintf(row, sizeof(row), "  %s", (char *)file_list[current_file_number]);
-          print_string(row, color, COLOR_BG, FILE_LIST_POSITION, ((i + 1) * 10));
-#else
           if((current_file_number == current_file_selection) &&
            (current_column == 0))
           {
@@ -459,7 +542,6 @@ s32 load_file(u8 **wildcards, u8 *result)
             print_string(file_list[current_file_number], COLOR_INACTIVE_ITEM,
              COLOR_BG, FILE_LIST_POSITION, ((i + 1) * 10));
           }
-#endif
         }
       }
 
@@ -481,6 +563,7 @@ s32 load_file(u8 **wildcards, u8 *result)
           }
         }
       }
+#endif
 
       gui_action = get_gui_input();
 
@@ -861,16 +944,19 @@ typedef struct _menu_type menu_type;
 #define binding_option(action, line_number)                                   \
 {                                                                             \
   NULL, NULL, NULL, NULL, NULL, NULL, action,                                 \
-  "Left/right: key 1 or 2. Enter: set it (hold a key\n"                       \
-  "and press another for a combination). del: clear.",                       \
+  "Enter picks the line; left/right: key 1 or 2; enter\n"                     \
+  "sets it (hold a key and press another for two). del: clear.",             \
   line_number, KEY_BINDING_OPTION                                             \
 }
 
-/* The main menu's slot lines, and the last line of options on the screen
- * (y 200): longer menus scroll. */
+/* The main menu's slot lines. */
+#if defined(NSPIRE_LIBRETRO)
+#define SAVE_SLOT_LINE 1
+#define LOAD_SLOT_LINE 2
+#else
 #define LOAD_SLOT_LINE 3
 #define SAVE_SLOT_LINE 4
-#define MENU_LAST_LINE 16
+#endif
 #endif
 
 #if defined(NSPIRE_LIBRETRO)
@@ -1016,6 +1102,8 @@ u8 *scale_options[] =
 #ifdef WIZ_BUILD
   "unscaled 3:2", "scaled 3:2 (slower)",
   "unscaled 3:2 (anti-tear)", "scaled 3:2 (anti-tear)"
+#elif defined(NSPIRE_LIBRETRO)
+  "Small (240x160)", "3:2, smooth", "Full screen, smooth", "3:2, sharp"
 #elif NSPIRE_BUILD
   "unscaled 3:2 (small)", "scaled/blended 3:2 (slowest)", "fullscreen/blended (slower)", "scaled/unblended 3:2 (fast)"
 #else
@@ -1642,6 +1730,12 @@ u32 menu(u16 *original_screen)
 
 #ifdef NSPIRE_BUILD
   u32 key_column = 0;          /* the key picked with left/right on key lines */
+#if defined(NSPIRE_LIBRETRO)
+  /* On the settings pages left/right turn the pages; enter picks a line to
+   * change (then left/right change it, enter keeps it, esc puts it back) */
+  int editing = 0;
+  u32 edit_from = 0;           /* the value when it was picked, for esc */
+#endif
   u32 current_option_y = 0;
   char menu_status[80] = "";   /* what the last action did */
   u8 *settings_for_options[] = { "all games", "this game only" };
@@ -1765,6 +1859,7 @@ u32 menu(u16 *original_screen)
         /* It said why. The last game is closed: the menu is without one. */
         gamepak_filename[0] = 0;
         first_load = 1;
+        ui_backdrop_clear();
         memset(original_screen, 0x00, 240 * 160 * 2);
         print_string_ext("No game loaded yet.", 0xFFFF, 0x0000,
          60, 75, original_screen, 240, 0, 0, FONT_HEIGHT);
@@ -2000,6 +2095,9 @@ u32 menu(u16 *original_screen)
 
   void submenu_about()
   {
+#if defined(NSPIRE_LIBRETRO)
+    return;   /* the About page draws it (nspire_ui_screens.c) */
+#endif
     print_string("gpsp-libretro for nSpire (Alpha v0.4.1)", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 10);
     print_string("by andymcca", COLOR_ACTIVE_ITEM, COLOR_BG, 10, 20);
 #if defined(NSPIRE_LIBRETRO)
@@ -2017,6 +2115,9 @@ u32 menu(u16 *original_screen)
 
   void submenu_main()
   {
+#if defined(NSPIRE_LIBRETRO)
+    return;   /* the main menu draws the game's name */
+#endif
     if (*gamepak_filename)
 	{
 #if defined(NSPIRE_LIBRETRO)
@@ -2057,11 +2158,11 @@ u32 menu(u16 *original_screen)
   u8 *nspire_sprlim_options[] = { "disabled", "enabled" };
   u8 *nspire_rtc_options[] = { "auto", "enabled", "disabled" };
   u8 *nspire_frame_mix_options[] = { "disabled", "enabled" };
-  u8 *nspire_lcd_cache_options[] = { "Range D-clean", "Full clean_dcache" };
+  u8 *nspire_lcd_cache_options[] = { "Range", "Full" };
   u8 *nspire_fps_overlay_options[] = { "off", "on", "detailed" };
   u8 *nspire_gba_blend_options[] = { "On", "Off (fast)" };
-  u8 *nspire_video_renderer_options[] = { "libretro video.cc", "legacy old_video/video.c" };
-  u8 *nspire_dynarec_ram_policy_options[] = { "Partial SMC (default)", "Classic (full flush on SMC)" };
+  u8 *nspire_video_renderer_options[] = { "video.cc", "Legacy (video.c)" };
+  u8 *nspire_dynarec_ram_policy_options[] = { "Partial SMC", "Classic" };
   u8 *brightness_options[] = { "calculator's", "1 (dimmest)", "2", "3", "4", "5", "6", "7",
    "8", "9", "10 (brightest)" };
   u8 *cpu_speed_options[] = { "normal", "408 MHz", "420 MHz", "432 MHz", "444 MHz", "456 MHz",
@@ -2126,9 +2227,9 @@ u32 menu(u16 *original_screen)
      "fullscreen to fill the entire PSP screen."
 #endif
 #if defined(NSPIRE_LIBRETRO)
-     "Scaled/unblended is the sharp 320x214 picture.\n"
-     "Blended ones are smoother and slower; unscaled is\n"
-     "the GBA's own 240x160 in the middle."
+     "3:2 keeps the GBA's shape (320x214); full screen\n"
+     "fills it. Smooth blends the pixels, sharp is the\n"
+     "fastest. Small: the GBA's own 240x160."
 #endif
      "", 2),
 #if defined(NSPIRE_LIBRETRO)
@@ -2166,9 +2267,9 @@ u32 menu(u16 *original_screen)
      "see corruption.", 8),
     string_selection_option(NULL, "Show FPS counter",
      nspire_fps_overlay_options, &nspire_fps_overlay, 3,
-     "Frames drawn a second / the most there can be.\n"
-     "Detailed: ms per frame running the game, drawing,\n"
-     "showing it (also logged to gpsp_perf.txt).", 9),
+     "Pictures a second / the most (fast forward: game\n"
+     "frames / 60). Detailed: ms per frame running the\n"
+     "game, drawing, showing it (and gpsp_perf.txt).", 9),
     string_selection_option(NULL, "GBA blending (BLDCNT)",
      nspire_gba_blend_options, &nspire_gba_blend_off, 2,
      "On: see-through layers, fades and sprites drawn\n"
@@ -2179,6 +2280,11 @@ u32 menu(u16 *original_screen)
      "libretro video.cc is the default renderer.\n"
      "legacy old_video/video.c can be faster in some\n"
      "scenes (uses video_blend.S).", 11),
+    string_selection_option(NULL, "Fast forward max speed",
+     (u8 **)nspire_ff_max_names, &nspire_ff_max, NSPIRE_FF_CHOICES,
+     "Fast forward's top speed, 1.1x to 10x, or\n"
+     "unlimited. If the game can't reach it, it runs as\n"
+     "fast as it can and still draws every picture.", 12),
 #endif
 #elif !defined(GP2X_BUILD)
     string_selection_option(NULL, "Frameskip type", frameskip_options,
@@ -2235,7 +2341,7 @@ u32 menu(u16 *original_screen)
 #endif
 #if defined(NSPIRE_LIBRETRO)
     action_option(menu_speed_test, NULL, "Run speed test",
-     "Runs the game from here for 20 seconds, three\n"
+     "Runs the game from here for 25 seconds, four\n"
      "ways, and shows where the time goes; then it's\n"
      "put back. Results: gpsp_results.txt.", 13),
     submenu_option(NULL, "Back", "Return to the main menu.", 15)
@@ -2500,17 +2606,37 @@ u32 menu(u16 *original_screen)
   make_menu(gamepad_config, submenu_gamepad, NULL);
   make_menu(analog_config, submenu_analog, NULL);
 
+#if defined(NSPIRE_LIBRETRO)
+  /* Over the paused game: playing first, then the settings pages and the
+   * managers, then leaving. A gap in the line numbers is a divider. */
+  menu_option_type main_options[] =
+  {
+    action_option(menu_exit, NULL, "Resume",
+     "Back to the game, where you left it.", 0),
+    numeric_selection_action_option(menu_save_state, NULL,
+     "Save state", &savestate_slot, MENU_SLOTS, "", SAVE_SLOT_LINE),
+    numeric_selection_action_option(menu_load_state, NULL,
+     "Load state", &savestate_slot, MENU_SLOTS, "", LOAD_SLOT_LINE),
+    action_option(menu_restart, NULL, "Restart",
+     "Starts the game over, as if the GBA were switched off and on.", 3),
+    submenu_option(&graphics_sound_menu, "Settings",
+     "Graphics, emulator, controls, saving and cheats. Left/right turn the pages.", 5),
+    action_option(menu_save_manager, NULL, "Save manager",
+     "This game's in-game save and states: compress, uncompress or delete them.", 6),
+    action_option(menu_rom_manager, NULL, "ROM manager",
+     "This folder's games: compress them into .zip files or back into .gba files. Saves stay.", 7),
+    action_option(menu_load, NULL, "Game list",
+     "Choose another game.", 9),
+    action_option(menu_quit, NULL, "Exit gpSP",
+     "Back to the calculator.", 10)
+  };
+#else
   menu_option_type main_options[] =
   {
 #ifdef NSPIRE_BUILD
 	submenu_option(&graphics_sound_menu, "Graphics options",
      "Display scale, frameskip, FPS counter, blending,\n"
      "renderer, and the speed test.", 0),
-#if defined(NSPIRE_LIBRETRO)
-	submenu_option(&emulator_menu, "Emulator options",
-     "Settings for all games or this one, BIOS, sprite\n"
-     "limit, RTC, interframe blending, CPU speed.", 1),
-#endif
 #else
     submenu_option(&graphics_sound_menu, "Graphics and Sound options",
      "Select to set display parameters and frameskip\n"
@@ -2525,11 +2651,6 @@ u32 menu(u16 *original_screen)
      "Saves the game here: to a new slot with auto-\n"
      "increment on (Cheats and Misc), else to the\n"
      "slot picked.", SAVE_SLOT_LINE),
-#if defined(NSPIRE_LIBRETRO)
-    action_option(menu_save_manager, NULL, "Save manager",
-     "This game's in-game save and states, their sizes:\n"
-     "compress, uncompress or delete them.", 5),
-#endif
 #if !defined(NSPIRE_BUILD)
     submenu_option(&savestate_menu, "Savestate options",
      "Select to enter a menu for loading, saving, and\n"
@@ -2547,11 +2668,6 @@ u32 menu(u16 *original_screen)
      "Cheats, save state options (auto-increment, save\n"
      "when leaving, load on start), in-game saves,\n"
      "compressing saves.", 8),
-#if defined(NSPIRE_LIBRETRO)
-    action_option(menu_rom_manager, NULL, "ROM manager",
-     "This folder's games: compress them into .zip\n"
-     "files or back into .gba files. Saves stay.", 9),
-#endif
     submenu_option(&about_menu, "About",
      "View credits and acknowledgements.", 10),
     action_option(menu_load, NULL, "Load new game",
@@ -2565,47 +2681,273 @@ u32 menu(u16 *original_screen)
     action_option(menu_quit, NULL, "Exit gpSP",
      "Select to exit gpSP and return to the menu.", 15)
   };
+#endif
 
   make_menu(main, submenu_main, NULL);
 
 #if defined(NSPIRE_LIBRETRO)
-  /* The slot lines say what selecting them does: which slot a save goes to
-   * (a new one with auto-increment on) and whether the slot to load from
-   * holds a state. */
+  /* With auto-increment on, a save goes to a new slot: left/right don't
+   * pick one for it then. (draw_menu_ui shows which.) */
   void refresh_slot_lines()
   {
-    static char load_line[64], save_line[64];
     u32 n;
 
     for(n = 0; n < sizeof(main_options) / sizeof(main_options[0]); n++)
+      if(main_options[n].line_number == SAVE_SLOT_LINE)
+        main_options[n].option_type = nspire_auto_increment ? ACTION_OPTION :
+         NUMBER_SELECTION_OPTION | ACTION_OPTION;
+  }
+#endif
+
+#if defined(NSPIRE_LIBRETRO)
+  /* ---- The new look (nspire_ui_screens.c) ---- */
+
+  /* The settings pages, in the order tab goes through them. */
+  menu_type *settings_pages[] =
+   { &graphics_sound_menu, &emulator_menu, &gamepad_config_menu, &cheats_misc_menu, &about_menu };
+  static const char *const settings_tabs[] =
+   { "Graphics", "Emulator", "Controls", "Saving", "About" };
+  const int settings_count = sizeof(settings_tabs) / sizeof(settings_tabs[0]);
+  static struct ui_menu_view view, last_view;
+  static char last_status[80];
+  static u16 paused_picture[STATE_PIC_W * STATE_PIC_H];
+  static u16 slot_picture[STATE_PIC_W * STATE_PIC_H];
+  int slot_picture_for = -1;   /* the slot in slot_picture, -1 none yet */
+  int slot_picture_has = 0;
+  int slot_waiting = -1;       /* picked, its picture not looked up yet */
+  u32 slot_picked_at = 0;
+  int menu_redraw = 1;
+  int capturing = 0;
+
+  int settings_page_of(menu_type *m)
+  {
+    int n;
+    for(n = 0; n < settings_count; n++)
+      if(settings_pages[n] == m)
+        return n;
+    return -1;
+  }
+
+  /* Lines the pages leave out: "Back" (esc goes back) and cheats that
+   * aren't loaded. */
+  int option_hidden(menu_option_type *o)
+  {
+    const u8 *cheat = (const u8 *)o->display_string;
+    if((o->option_type & SUBMENU_OPTION) && !o->sub_menu)
+      return 1;
+    if(cheat >= &cheat_format_str[0][0] && cheat < &cheat_format_str[0][0] + sizeof(cheat_format_str))
+      return (u32)((cheat - &cheat_format_str[0][0]) / sizeof(cheat_format_str[0])) >= num_cheats;
+    return 0;
+  }
+
+  /* The next line up or down that's shown (n itself if none is). */
+  u32 next_visible(u32 n, int step)
+  {
+    u32 tries, count = current_menu->num_options;
+    for(tries = 0; tries < count; tries++)
     {
-      menu_option_type *o = &main_options[n];
-      if(o->line_number == LOAD_SLOT_LINE)
+      n = (n + count + step) % count;
+      if(!option_hidden(current_menu->options + n))
+        return n;
+    }
+    return n;
+  }
+
+  /* "Display scaling: %s" -> "Display scaling"; values start upper case. */
+  void row_label(const char *display, char *out, size_t size)
+  {
+    const char *colon = strstr(display, ": %");
+    snprintf(out, size, "%.*s", colon ? (int)(colon - display) : (int)strlen(display), display);
+  }
+
+  /* A two-way line (off/on): enter flips it. */
+  int option_is_switch(menu_option_type *o)
+  {
+    const char *const *names = (const char *const *)o->options;
+    return (o->option_type & STRING_SELECTION_OPTION) && o->num_options == 2 &&
+     ((!strcmp(names[0], "off") && !strcmp(names[1], "on")) ||
+      (!strcmp(names[0], "disabled") && !strcmp(names[1], "enabled")) ||
+      (!strcmp(names[0], "no") && !strcmp(names[1], "yes")));
+  }
+
+  void row_value(menu_option_type *o, struct ui_row *row)
+  {
+    if(o->option_type & NUMBER_SELECTION_OPTION)
+    {
+      row->kind = UI_ROW_PICK;
+      snprintf(row->value, sizeof(row->value), "%u", *o->current_option);
+    }
+    else if(o->option_type & STRING_SELECTION_OPTION)
+    {
+      const char *const *names = (const char *const *)o->options;
+      u32 picked = *o->current_option;
+      if(option_is_switch(o))
       {
-        snprintf(load_line, sizeof(load_line), "Load state from slot: %%03d%s",
-         states_exists((int)savestate_slot) ? "" : " (empty)");
-        o->display_string = load_line;
+        row->kind = UI_ROW_SWITCH;
+        row->on = picked == 1;
+        return;
       }
-      else if(o->line_number == SAVE_SLOT_LINE)
+      row->kind = UI_ROW_PICK;
+      snprintf(row->value, sizeof(row->value), "%s", names[picked]);
+      row->value[0] = (char)toupper((unsigned char)row->value[0]);
+    }
+    else if(o->option_type & SUBMENU_OPTION)
+      row->kind = UI_ROW_SUBMENU;
+    else
+      row->kind = UI_ROW_ACTION;
+  }
+
+  /* The main menu's picture: the slot's state for Load state (looked up
+   * once the slot has stayed picked for a sixth of a second), else the
+   * game as it was paused. */
+  void main_picture(menu_option_type *o)
+  {
+    int slot = (int)savestate_slot;
+
+    view.picture = first_load ? NULL : paused_picture;
+    view.pic_empty = "No game";
+    view.pic_head[0] = view.pic_sub[0] = 0;
+    view.help = o->help_string;
+    if(first_load)
+      return;
+
+    if(o->line_number == SAVE_SLOT_LINE)
+    {
+      int target = nspire_save_target();
+      if(target < 0)
+        snprintf(view.pic_head, sizeof(view.pic_head), "All 1000 slots are used");
+      else
+        snprintf(view.pic_head, sizeof(view.pic_head), "Save to slot %03d", target);
+      snprintf(view.pic_sub, sizeof(view.pic_sub), "%s", nspire_auto_increment ? "A new slot" :
+       states_exists(target) ? "Replaces the state there" : "An empty slot");
+      view.help = nspire_auto_increment ?
+       "Saves the game as it is now. Each save gets its own slot (Saving page)." :
+       "Saves the game as it is now. Left/right pick the slot.";
+    }
+    else if(o->line_number == LOAD_SLOT_LINE)
+    {
+      int count = states_count(), newest = states_newest();
+      if(slot != slot_picture_for)
       {
-        if(nspire_auto_increment)
+        if(slot != slot_waiting)
+        {
+          slot_waiting = slot;
+          slot_picked_at = nspire_ticks();
+        }
+        if(!states_exists(slot) || nspire_ticks() - slot_picked_at >= NSPIRE_TICK_HZ / 6)
+        {
+          slot_picture_has = states_exists(slot) && states_picture(slot, slot_picture);
+          slot_picture_for = slot;
+          view.version++;
+        }
+      }
+      view.picture = slot_picture_for == slot && slot_picture_has ? slot_picture : NULL;
+      view.pic_empty = !states_exists(slot) ? "Empty slot" : slot_picture_for == slot ? "No picture" : "";
+      snprintf(view.pic_head, sizeof(view.pic_head), "Slot %03d%s", slot,
+       slot == newest ? " " UI_DOT " newest" : "");
+      if(count)
+        snprintf(view.pic_sub, sizeof(view.pic_sub), "%d state%s " UI_DOT " " UI_ARROW_L " " UI_ARROW_R
+         " picks one", count, count == 1 ? "" : "s");
+      else
+        snprintf(view.pic_sub, sizeof(view.pic_sub), "No states yet");
+      view.help = "Goes back to that moment. Anything since is lost unless you save first.";
+    }
+  }
+
+  /* Draws the menu when something on it changed. */
+  void draw_menu_ui()
+  {
+    static char title[160], tags[96];
+    int page = settings_page_of(current_menu);
+    u32 n, last_line = 0;
+
+    view.page = page;
+    view.tabs = settings_tabs;
+    view.tab_count = settings_count;
+    view.count = 0;
+    view.picked = 0;
+    view.status = menu_status;
+    view.capturing = capturing;
+    view.editing = editing;
+    view.about = current_menu == &about_menu;
+    view.no_game = first_load;
+    view.picture = NULL;
+    view.pic_empty = NULL;
+    view.pic_head[0] = view.pic_sub[0] = 0;
+    view.help = current_option->help_string;
+    if(first_load)
+      snprintf(title, sizeof(title), "gpSP");
+    else
+      ui_game_title(gamepak_filename, title, sizeof(title), tags, sizeof(tags));
+    view.title = title;
+
+    memset(view.rows, 0, sizeof(view.rows));
+    for(n = 0; n < current_menu->num_options && view.count < UI_MAX_ROWS; n++)
+    {
+      menu_option_type *o = current_menu->options + n;
+      struct ui_row *row = &view.rows[view.count];
+
+      if(option_hidden(o))
+        continue;
+      if(o == current_option)
+        view.picked = view.count;
+      if(view.count && o->line_number > last_line + 1 && page < 0)
+        row->gap_before = 1;
+      last_line = o->line_number;
+
+      if(o->option_type & KEY_BINDING_OPTION)
+      {
+        u32 action = o->num_options;
+        snprintf(row->label, sizeof(row->label), "%s", action_names[action]);
+        if(key_bindings[action][0].key)
+          binding_name(key_bindings[action][0], row->value, sizeof(row->value));
+        if(key_bindings[action][1].key)
+          binding_name(key_bindings[action][1], row->value2, sizeof(row->value2));
+        row->kind = UI_ROW_KEYS;
+        row->key_column = (s8)key_column;
+      }
+      else if(page < 0)
+      {
+        /* the main menu: short names; the slot lines show their slot */
+        snprintf(row->label, sizeof(row->label), "%s", o->display_string);
+        row->kind = UI_ROW_ACTION;
+        if(o->line_number == SAVE_SLOT_LINE)
+          snprintf(row->label, sizeof(row->label), "Save state");
+        else if(o->line_number == LOAD_SLOT_LINE)
+          snprintf(row->label, sizeof(row->label), "Load state");
+        if(o->line_number == SAVE_SLOT_LINE && !first_load)
         {
           int target = nspire_save_target();
-          if(target < 0)
-            snprintf(save_line, sizeof(save_line), "Save state: all 1000 slots are used");
-          else
-            snprintf(save_line, sizeof(save_line), "Save state to new slot %03d", target);
-          o->option_type = ACTION_OPTION;
+          if(target >= 0)
+            snprintf(row->value, sizeof(row->value), "%03d", target);
+          row->kind = nspire_auto_increment ? UI_ROW_ACTION : UI_ROW_PICK;
         }
-        else
+        else if(o->line_number == LOAD_SLOT_LINE && !first_load)
         {
-          snprintf(save_line, sizeof(save_line), "Save state to slot: %%03d%s",
-           states_exists((int)savestate_slot) ? " (replaces it)" : "");
-          o->option_type = NUMBER_SELECTION_OPTION | ACTION_OPTION;
+          if(states_count())
+            snprintf(row->value, sizeof(row->value), "%03u", savestate_slot);
+          else
+            snprintf(row->value, sizeof(row->value), "none");
+          row->kind = UI_ROW_PICK;
         }
-        o->display_string = save_line;
       }
+      else
+      {
+        row_label((const char *)o->display_string, row->label, sizeof(row->label));
+        row_value(o, row);
+      }
+      view.count++;
     }
+
+    if(page < 0)
+      main_picture(current_option);
+
+    if(!menu_redraw && !memcmp(&view, &last_view, sizeof(view)) && !strcmp(menu_status, last_status))
+      return;
+    ui_menu_draw(&view);
+    last_view = view;
+    snprintf(last_status, sizeof(last_status), "%s", menu_status);
+    menu_redraw = 0;
   }
 #endif
 
@@ -2623,6 +2965,15 @@ u32 menu(u16 *original_screen)
     current_menu = new_menu;
     current_option = new_menu->options;
     current_option_num = 0;
+#if defined(NSPIRE_LIBRETRO)
+    editing = 0;
+    if(option_hidden(current_option))
+    {
+      current_option_num = next_visible(0, 1);
+      current_option = new_menu->options + current_option_num;
+    }
+    menu_redraw = 1;
+#endif
     if(current_menu->init_function)
      current_menu->init_function();
   }
@@ -2746,6 +3097,16 @@ u32 menu(u16 *original_screen)
     print_string_ext("No game loaded yet.", 0xFFFF, 0x0000,
      60, 75,original_screen, 240, 0, 0, FONT_HEIGHT);
   }
+#if defined(NSPIRE_LIBRETRO)
+  /* The paused game, behind the main menu and beside it. */
+  if(first_load)
+    ui_backdrop_clear();
+  else
+  {
+    ui_backdrop_make(original_screen, 240);
+    ui_scale(paused_picture, STATE_PIC_W, STATE_PIC_H, original_screen, 240, 160, 240);
+  }
+#endif
 
   choose_menu(&main_menu);
 
@@ -2766,53 +3127,21 @@ u32 menu(u16 *original_screen)
 
   while(repeat)
   {
-    u32 scroll = 0;
+#if defined(NSPIRE_LIBRETRO)
+    refresh_slot_lines();
+    current_menu->init_function();
+    draw_menu_ui();
+    update_at_vblank();
+#else
     display_option = current_menu->options;
 #ifdef NSPIRE_BUILD
 	clear_screen(COLOR_BG);
-#endif
-#if defined(NSPIRE_LIBRETRO)
-    refresh_slot_lines();
-    /* Menus longer than the screen scroll to keep the selected line in view. */
-    {
-      u32 max_line = 0, line_now = current_option->line_number;
-      for(i = 0; i < current_menu->num_options; i++)
-        if(current_menu->options[i].line_number > max_line)
-          max_line = current_menu->options[i].line_number;
-      if(max_line > MENU_LAST_LINE && line_now > MENU_LAST_LINE / 2)
-      {
-        scroll = line_now - MENU_LAST_LINE / 2;
-        if(scroll > max_line - MENU_LAST_LINE)
-          scroll = max_line - MENU_LAST_LINE;
-      }
-    }
 #endif
     current_menu->init_function();
 	for(i = 0; i < current_menu->num_options; i++, display_option++)
     {
       u32 line = display_option->line_number;
 
-#if defined(NSPIRE_LIBRETRO)
-      if(line < scroll || line - scroll > MENU_LAST_LINE)
-        continue;
-      line -= scroll;
-      if(display_option->option_type & KEY_BINDING_OPTION)
-      {
-        /* "A                  del       [7]": the picked key in brackets,
-         * the second keys lined up. */
-        char first[24], second[24], cell[32];
-        u32 action = display_option->num_options;
-        int picked = display_option == current_option;
-        binding_name(key_bindings[action][0], first, sizeof(first));
-        binding_name(key_bindings[action][1], second, sizeof(second));
-        snprintf(cell, sizeof(cell), "%s%s%s", picked && key_column == 0 ? "[" : " ", first,
-         picked && key_column == 0 ? "]" : " ");
-        snprintf((char *)line_buffer, sizeof(line_buffer), "%-17s %-11s%s%s%s",
-         action_names[action], cell,
-         picked && key_column == 1 ? "[" : " ", second, picked && key_column == 1 ? "]" : " ");
-      }
-      else
-#endif
       if(display_option->option_type & NUMBER_SELECTION_OPTION)
       {
         sprintf(line_buffer, display_option->display_string,
@@ -2860,6 +3189,7 @@ u32 menu(u16 *original_screen)
 #ifdef NSPIRE_BUILD
 	update_at_vblank();
 #endif
+#endif
 
     gui_action = get_gui_input();
 #ifdef NSPIRE_BUILD
@@ -2869,22 +3199,97 @@ u32 menu(u16 *original_screen)
     if(gui_action == CURSOR_BACK)
       gui_action = CURSOR_EXIT;
 #endif
+#if defined(NSPIRE_LIBRETRO)
+    if(settings_page_of(current_menu) >= 0)
+    {
+      int page = settings_page_of(current_menu), turn = 0;
+      int keys = (current_option->option_type & KEY_BINDING_OPTION) != 0;
+      int pick = (current_option->option_type & (NUMBER_SELECTION_OPTION |
+       STRING_SELECTION_OPTION)) != 0;
+
+      /* tab (shift+tab back), or left/right when no line is picked, turn
+       * the pages (once per press: holding doesn't fly through them) */
+      if(key_pressed(KEY_TAB))
+        turn = key_down(KEY_SHIFT) ? -1 : 1;
+      else if(!editing && (gui_action == CURSOR_LEFT || gui_action == CURSOR_RIGHT))
+      {
+        if(gui_repeat_count())
+          continue;
+        turn = gui_action == CURSOR_RIGHT ? 1 : -1;
+      }
+      if(turn)
+      {
+        page = (page + settings_count + turn) % settings_count;
+        menu_status[0] = 0;
+        choose_menu(settings_pages[page]);
+        continue;
+      }
+
+      if(!editing && gui_action == CURSOR_SELECT && (pick || keys))
+      {
+        if(option_is_switch(current_option))
+        {
+          *current_option->current_option ^= 1;
+          if(current_option->passive_function)
+            current_option->passive_function();
+          continue;
+        }
+        editing = 1;
+        key_column = 0;
+        edit_from = pick ? *current_option->current_option : 0;
+        continue;
+      }
+      if(!editing && gui_action == CURSOR_CLEAR)
+        continue;
+      if(editing)
+      {
+        if(gui_action == CURSOR_EXIT)
+        {
+          /* esc: a value goes back to what it was; keys stay as set */
+          if(pick && *current_option->current_option != edit_from)
+          {
+            *current_option->current_option = edit_from;
+            if(current_option->passive_function)
+              current_option->passive_function();
+          }
+          editing = 0;
+          continue;
+        }
+        if(gui_action == CURSOR_SELECT && !keys)
+        {
+          editing = 0;
+          continue;
+        }
+        /* up/down keep the value and move on */
+        if(gui_action == CURSOR_UP || gui_action == CURSOR_DOWN)
+          editing = 0;
+      }
+    }
+#endif
 
     switch(gui_action)
     {
       case CURSOR_DOWN:
+#if defined(NSPIRE_LIBRETRO)
+        current_option_num = next_visible(current_option_num, 1);
+#else
         current_option_num = (current_option_num + 1) %
           current_menu->num_options;
+#endif
 
         current_option = current_menu->options + current_option_num;
         clear_help();
         break;
 
       case CURSOR_UP:
+#if defined(NSPIRE_LIBRETRO)
+        current_option_num = next_visible(current_option_num, -1);
+#else
         if(current_option_num)
           current_option_num--;
         else
           current_option_num = current_menu->num_options - 1;
+#endif
 
         current_option = current_menu->options + current_option_num;
         clear_help();
@@ -2925,11 +3330,45 @@ u32 menu(u16 *original_screen)
         if(current_menu == &main_menu)
           menu_exit();
 
+#if defined(NSPIRE_LIBRETRO)
+        /* back from a settings page: on Settings */
+        if(settings_page_of(current_menu) >= 0)
+        {
+          choose_menu(&main_menu);
+          for(i = 0; i < main_menu.num_options; i++)
+            if(main_options[i].sub_menu == &graphics_sound_menu)
+            {
+              current_option_num = i;
+              current_option = main_options + i;
+            }
+          break;
+        }
+#endif
         choose_menu(&main_menu);
         break;
 
       case CURSOR_SELECT:
-#ifdef NSPIRE_BUILD
+#if defined(NSPIRE_LIBRETRO)
+        /* what the line does may change any of it (a save, another
+         * screen in between) */
+        menu_redraw = 1;
+        slot_picture_for = -1;
+        if(current_option->option_type & KEY_BINDING_OPTION)
+        {
+          key_binding b;
+          capturing = 1;
+          snprintf(menu_status, sizeof(menu_status),
+           "Press the key (or two keys together). An arrow cancels.");
+          draw_menu_ui();
+          capturing = 0;
+          menu_status[0] = 0;
+          menu_redraw = 1;
+          b = key_capture();
+          if(b.key)
+            key_bindings[current_option->num_options][key_column] = b;
+          break;
+        }
+#elif defined(NSPIRE_BUILD)
         if(current_option->option_type & KEY_BINDING_OPTION)
         {
           key_binding b;
@@ -2964,6 +3403,9 @@ u32 menu(u16 *original_screen)
     }
   }
 
+#if defined(NSPIRE_LIBRETRO)
+  ui_shown[0] = 0;
+#endif
   set_gba_resolution(screen_scale);
   video_resolution_small();
   menu_get_clock_speed();

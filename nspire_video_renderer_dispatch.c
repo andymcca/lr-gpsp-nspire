@@ -55,7 +55,9 @@ static void sync_state_from_renderer(int use_old_renderer)
   }
 }
 
-void update_scanline(void)
+/* Out of line: the PC speed estimate (tests/calc_speed.py) counts drawing
+ * time by this function. */
+__attribute__((noinline)) void update_scanline(void)
 {
   int use_old_renderer = (nspire_video_renderer_choice != 0);
   u32 start = 0;

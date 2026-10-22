@@ -39,6 +39,17 @@ void nspire_game_move_old_files(const char *rom_path);
 void states_open_game(const char *rom_path);
 void states_file_name(int slot, char *out, size_t size);
 
+/* A state's picture of the game (newer states have one): STATE_PIC_W x
+ * STATE_PIC_H in 5:6:5, 3/5 of the GBA's size. */
+#define STATE_PIC_W 144
+#define STATE_PIC_H 96
+/* 1 if the slot's state has a picture (put in pic), 0 if not. */
+int states_picture(int slot, unsigned short *pic);
+
+/* Another game's states, for the game list, leaving the open game's as they
+ * are: how many, the newest (-1: none), and its picture (1 if it has one). */
+int states_peek(const char *rom_path, int *count, int *newest, unsigned short *pic);
+
 int states_exists(int slot);
 int states_count(void);
 /* The most recently saved slot, or -1 if the game has none. */
@@ -68,6 +79,10 @@ int states_delete(int slot);
 int nspire_backup_info(long *bytes, int *compressed);
 int nspire_backup_set_compressed(int compressed);
 int nspire_backup_delete(void);
+
+/* How long the last saves and loads took, by part, to
+ * gpsp_states_time.txt.tns in the saves folder (when gpSP closes). */
+void states_timing_flush(void);
 
 /* The game's state in memory, for the speed test: states_snapshot returns a
  * buffer (free() it) or NULL; states_restore puts it back. */

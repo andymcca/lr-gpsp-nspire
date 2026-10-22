@@ -23,8 +23,12 @@ typedef uint32_t u32;
 void upscale_aspect(u16 *dst, u16 *src);
 void upscale_aspect_fast(u16 *dst, u16 *src);
 void nspire_turn_rect_555(u16 *dst, const u16 *src, u32 src_pitch, u32 x0, u32 y0, u32 w, u32 h);
-void nspire_blend_turn_aspect(u16 *dst, const u16 *src, u16 *prev);
-void nspire_blend_turn_full(u16 *dst, const u16 *src, u16 *prev);
+void nspire_blend_turn_aspect(u16 *dst, const u16 *src, const u16 *prev);
+void nspire_blend_turn_full(u16 *dst, const u16 *src, const u16 *prev);
+/* blend_ref.c: nspire_blend.c before the fused 3:2 picture (prev got each
+ * frame then). */
+void ref_blend_turn_aspect(u16 *dst, const u16 *src, u16 *prev);
+void ref_blend_turn_full(u16 *dst, const u16 *src, u16 *prev);
 
 #define W 240
 #define H 160
@@ -33,6 +37,9 @@ void nspire_blend_turn_full(u16 *dst, const u16 *src, u16 *prev);
 static u16 frame[W * H] __attribute__((aligned(32)));
 static u16 old_mix_prev[W * H], old_mixed[W * H];
 static u16 new_mix_prev[W * H] __attribute__((aligned(32)));
+static u16 ref_mix_prev[W * H] __attribute__((aligned(32)));
+static u16 prev_copy[W * H];
+static u16 ref_screen[240 * 320] __attribute__((aligned(32)));
 static u16 upscale_src[320 * H] __attribute__((aligned(32)));
 static u16 landscape[320 * 240] __attribute__((aligned(32)));
 static u16 old_screen[240 * 320] __attribute__((aligned(32)));
@@ -285,6 +292,11 @@ int main(void)
     for (n = 0; n < 240 * 320; n++)
       new_screen[n] = SENTINEL;
     nspire_blend_turn_aspect(new_screen, frame, NULL);
+    for (n = 0; n < 240 * 320; n++)
+      ref_screen[n] = SENTINEL;
+    ref_blend_turn_aspect(ref_screen, frame, NULL);
+    snprintf(name, sizeof(name), "3:2, %s: as before, exactly", kind_names[kind]);
+    check(!memcmp(new_screen, ref_screen, sizeof(new_screen)), name);
     snprintf(name, sizeof(name), "3:2, %s", kind_names[kind]);
     check(same_picture(13, 12, 213, name), name);
     ref_src = frame;
@@ -304,18 +316,27 @@ int main(void)
   }
 
   /* Interframe blending: a few frames in a row, each path with its own
-   * previous frame (both start from 0xFFFF, as nspire_video_mix_reset). */
+   * previous frame (all start from 0xFFFF). The new path only reads it:
+   * the caller keeps the frame drawn before (nspire_video_present.c draws
+   * into two buffers in turn), here by copying. */
   for (mix = 0; mix < 2; mix++)
   {
     memset(old_mix_prev, 0xFF, sizeof(old_mix_prev));
     memset(new_mix_prev, 0xFF, sizeof(new_mix_prev));
+    memset(ref_mix_prev, 0xFF, sizeof(ref_mix_prev));
     for (n = 0; n < 4; n++)
     {
       make_frame(n == 2 ? 2 : n == 3 ? 4 : 0);
+      memcpy(prev_copy, new_mix_prev, sizeof(prev_copy));
+      memset(new_screen, 0x5A, sizeof(new_screen));
+      memset(ref_screen, 0x5A, sizeof(ref_screen));
       if (mix == 0)
       {
         old_aspect(1);
         nspire_blend_turn_aspect(new_screen, frame, new_mix_prev);
+        ref_blend_turn_aspect(ref_screen, frame, ref_mix_prev);
+        snprintf(name, sizeof(name), "3:2 with interframe blending, frame %d: as before, exactly", n + 1);
+        check(!memcmp(new_screen, ref_screen, sizeof(new_screen)), name);
         snprintf(name, sizeof(name), "3:2 with interframe blending, frame %d", n + 1);
         check(same_picture(13, 12, 213, name), name);
         ref_src = old_mixed;
@@ -326,14 +347,18 @@ int main(void)
       {
         old_full(1);
         nspire_blend_turn_full(new_screen, frame, new_mix_prev);
+        ref_blend_turn_full(ref_screen, frame, ref_mix_prev);
+        snprintf(name, sizeof(name), "fullscreen with interframe blending, frame %d: as before, exactly", n + 1);
+        check(!memcmp(new_screen, ref_screen, sizeof(new_screen)), name);
         snprintf(name, sizeof(name), "fullscreen with interframe blending, frame %d", n + 1);
         check(same_picture(0, 0, 240, name), name);
         ref_src = old_mixed;
         snprintf(name, sizeof(name), "fullscreen with interframe blending, frame %d: the math", n + 1);
         check(matches_math(ref_full, 0, 240, name), name);
       }
-      snprintf(name, sizeof(name), "%s: the previous frame kept, frame %d", mix ? "fullscreen" : "3:2", n + 1);
-      check(!memcmp(new_mix_prev, frame, sizeof(frame)), name);
+      snprintf(name, sizeof(name), "%s: the previous frame only read, frame %d", mix ? "fullscreen" : "3:2", n + 1);
+      check(!memcmp(new_mix_prev, prev_copy, sizeof(prev_copy)), name);
+      memcpy(new_mix_prev, frame, sizeof(frame));
     }
   }
 

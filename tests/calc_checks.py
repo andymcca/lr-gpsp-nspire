@@ -13,6 +13,14 @@ its disassembly. Needs the Ndless toolchain on PATH (arm-none-eabi-objdump).
   alignment and crashed when video.cc filled from an odd pixel (Pokemon
   battle wipes). An odd start must be stored alone before the first stmia.
   tests/arm/fill_test.c runs it; this checks the build has that version.
+* The code every scanline event and interrupt runs (common.h NSPIRE_HOT,
+  .text.hot.gpsp: update_gba, the block lookups, arm_stub.S...) has to be
+  one stretch smaller than the 16 KB instruction cache, with nothing else
+  (main once landed in the middle of it).
+* The dynarec's fast push/pop (arm_emit.h nspire_block_fast) finds IWRAM at
+  a fixed distance below reg (NSPIRE_IWRAM_DATA, arm_stub.S's .bss); if the
+  layout moves, the fast path turns itself off, which would cost speed
+  without anything else showing it.
 """
 
 import re
@@ -35,10 +43,55 @@ def function(dis, name):
     return lines
 
 
+def symbols():
+    out = subprocess.run(["arm-none-eabi-nm", "-S", ELF], capture_output=True, text=True,
+                         check=True).stdout
+    syms = {}
+    for line in out.splitlines():
+        p = line.split()
+        if len(p) >= 3:
+            try:
+                syms[p[-1]] = (int(p[0], 16), int(p[1], 16) if len(p) == 4 else 0)
+            except ValueError:
+                pass
+    return syms
+
+
+HOT = ["update_gba", "block_lookup_address_arm", "block_lookup_address_thumb", "set_cpu_mode",
+       "check_and_raise_interrupts", "nspire_flush_lines", "arm_update_gba_check_thumb",
+       "execute_spsr_restore", "mem_dispatch_load_u32", "ext_store_iwram_u32"]
+IWRAM_DATA = 0xA0000   # arm_emit.h NSPIRE_IWRAM_DATA
+
+
+def check_layout():
+    syms = symbols()
+    failed = 0
+    missing = [n for n in HOT + ["reg", "iwram", "main"] if n not in syms]
+    if missing:
+        print("FAIL: no %s in %s" % (", ".join(missing), ELF))
+        return 1
+    lo = min(syms[n][0] for n in HOT)
+    hi = max(syms[n][0] + max(syms[n][1], 4) for n in HOT)
+    main_at = syms["main"][0]
+    if hi - lo > 16 * 1024 or lo <= main_at < hi:
+        print("FAIL: the hot code spans 0x%x-0x%x (%d bytes)%s" %
+              (lo, hi, hi - lo, ", main is inside it" if lo <= main_at < hi else ""))
+        failed += 1
+    else:
+        print("hot code: one stretch of %.1f KB (0x%x-0x%x)" % ((hi - lo) / 1024.0, lo, hi))
+    gap = syms["reg"][0] - (syms["iwram"][0] + 0x8000)
+    if gap != IWRAM_DATA:
+        print("FAIL: IWRAM's data is 0x%x below reg, the fast push/pop expects 0x%x" % (gap, IWRAM_DATA))
+        failed += 1
+    else:
+        print("IWRAM's data is 0x%x below reg, as the fast push/pop expects" % gap)
+    return failed
+
+
 def main():
     dis = subprocess.run(["arm-none-eabi-objdump", "-d", ELF], capture_output=True, text=True,
                          check=True).stdout
-    failed = 0
+    failed = check_layout()
     menu = function(dis, "menu")
     if not menu:
         print("FAIL: no menu() in %s" % ELF)

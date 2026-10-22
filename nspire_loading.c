@@ -8,49 +8,69 @@
 #include "nspire_gui_video.h"
 #include "nspire_frontend.h"
 #include "nspire_keys.h"
+#include "nspire_states.h"
+#include "nspire_ui.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
 
-/* gpSP's menu colors (gui.c's color16) */
-#define MENU_COLOR(r, g, b) ((u16)((((g) & 1) << 15) | ((b) << 10) | (((g) >> 1) << 5) | (r)))
-#define COLOR_BACK  MENU_COLOR(2, 8, 10)
-#define COLOR_TITLE MENU_COLOR(31, 63, 31)
-#define COLOR_TEXT  MENU_COLOR(16, 40, 24)
-#define COLOR_BAR   MENU_COLOR(13, 40, 18)
-#define COLOR_EMPTY MENU_COLOR(4, 14, 16)
-#define COLOR_ERROR MENU_COLOR(31, 44, 0)
+#define COLOR_TEXT  UI_TEXT2
+#define COLOR_ERROR UI_WARN
 
-#define BAR_X 30
-#define BAR_Y 110
-#define BAR_W 260
-#define BAR_H 8
+/* The bar: under the game's name */
+#define BAR_W 160
+#define BAR_H 4
 
-static char game_name[52];
+static char title[160], tags[96];
+static u16 picture[STATE_PIC_W * STATE_PIC_H];
+static int has_picture;
 static u32 bar_done, bar_total;
 
 extern void (*nspire_rom_progress)(u32 done, u32 total);
 
-/* line may have a second line after a '\n'; more goes under it. Without
- * the bar, line goes where the bar would be. */
-static void draw_screen(const char *title, int bar, const char *line, u16 line_color,
-                        const char *more)
+/* The game (the picture of the state it resumes from, if it does), its
+ * name, the bar, and a line under it; or, without the bar, why it stopped
+ * and a key to go on. */
+static void draw_screen(const char *what, int bar, const char *line, u16 line_color, const char *more)
 {
-  clear_screen(COLOR_BACK);
-  print_string(title, COLOR_TEXT, COLOR_BACK, BAR_X, 80);
-  print_string(game_name, COLOR_TITLE, COLOR_BACK, BAR_X, 92);
+  int y = has_picture ? 156 : 104;      /* the name's baseline */
+  char fit[160];
+
+  ui_begin();
+  ui_fill(UI_BG);
+  if (has_picture)
+  {
+    /* rows 20-117: 12 clear rows above the "Loading" over the name */
+    ui_rrect_alpha((UI_W - STATE_PIC_W) / 2 - 1, 20, STATE_PIC_W + 2, STATE_PIC_H + 2, 5, UI_TEXT, 5);
+    ui_blit_rounded((UI_W - STATE_PIC_W) / 2, 21, picture, STATE_PIC_W, STATE_PIC_H, STATE_PIC_W, 4);
+  }
+  ui_text_center(UI_W / 2, y - 18, what, &ui_font_small, UI_TEXT3);
+  ui_text_center(UI_W / 2, y, ui_fit(title, &ui_font_title, 290, fit, sizeof(fit)), &ui_font_title, UI_TEXT);
+  if (tags[0])
+    ui_text_center(UI_W / 2, y + 15, tags, &ui_font_small, UI_TEXT3);
+  y += 30;
   if (bar)
   {
-    fill_rect(BAR_X, BAR_Y, BAR_W, BAR_H, COLOR_EMPTY);
+    int x = (UI_W - BAR_W) / 2;
+    ui_rrect(x, y, BAR_W, BAR_H, 2, UI_SURFACE);
     if (bar_total)
-      fill_rect(BAR_X, BAR_Y, (u32)((u64)BAR_W * bar_done / bar_total), BAR_H, COLOR_BAR);
+      ui_rrect(x, y, (int)((u64)BAR_W * bar_done / bar_total), BAR_H, 2, UI_ACCENT);
+    y += 20;
   }
+  else
+    y += 6;
   if (line)
-    print_string(line, line_color, COLOR_BACK, BAR_X, bar ? 124 : BAR_Y);
+    ui_wrap_center(UI_W / 2, y, 14, 280, 3, line, &ui_font_small, line_color);
   if (more)
-    print_string(more, COLOR_TEXT, COLOR_BACK, BAR_X, 150);
-  flip_screen();
+  {
+    /* [any key] Back to the list, in the middle at the bottom */
+    int w = ui_text_width("any key", &ui_font_caps) + 12 + ui_text_width(more, &ui_font_small);
+    int end = ui_keycap(UI_W / 2 - w / 2, 222, "any key");
+    ui_text(end + 4, 231, more, &ui_font_small, UI_TEXT2);
+  }
+  snprintf(ui_shown, sizeof(ui_shown), "%s", bar ? "loading" : "stopped");
+  ui_present();
 }
 
 static void draw(const char *line, u16 line_color, const char *more)
@@ -69,13 +89,12 @@ static void rom_progress(u32 done, u32 total)
 
 void nspire_loading_start(const char *rom_path)
 {
-  const char *slash = strrchr(rom_path, '/');
-  size_t len;
+  int count, newest;
 
-  snprintf(game_name, sizeof(game_name), "%s", slash ? slash + 1 : rom_path);
-  len = strlen(game_name);
-  if (len > 4 && !strcasecmp(game_name + len - 4, ".tns"))
-    game_name[len - 4] = 0;
+  ui_game_title(rom_path, title, sizeof(title), tags, sizeof(tags));
+  /* the moment it carries on from */
+  has_picture = nspire_load_on_start && !nspire_skip_state_load &&
+                states_peek(rom_path, &count, &newest, picture);
   bar_done = bar_total = 0;
   nspire_rom_progress = rom_progress;
   draw("Reading the game...", COLOR_TEXT, NULL);
@@ -96,7 +115,7 @@ void nspire_game_stopped(const char *why)
   keys_wait_release();
   do
   {
-    draw_screen("Stopped", 0, why, COLOR_ERROR, "Press a key.");
+    draw_screen("Stopped", 0, why, COLOR_ERROR, "Back to the list");
     update_at_vblank();
     keys_poll();
   } while (!any_key_down());
@@ -110,7 +129,7 @@ void nspire_loading_failed(const char *why)
   keys_wait_release();
   do
   {
-    draw(why, COLOR_ERROR, "Press a key.");
+    draw_screen("Couldn't start it", 0, why, COLOR_ERROR, "Back to the list");
     update_at_vblank();
     keys_poll();
   } while (!any_key_down());

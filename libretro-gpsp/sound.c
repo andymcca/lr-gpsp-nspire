@@ -44,7 +44,7 @@ static fixed16_16 gbc_sound_tick_step;
 
 /* Queue 4 samples to the top of the DS FIFO, wrap around circularly */
 
-void sound_timer_queue32(u32 channel, u32 value)
+NSPIRE_HOT void sound_timer_queue32(u32 channel, u32 value)
 {
   direct_sound_struct *ds = &direct_sound_channel[channel];
 
@@ -62,7 +62,7 @@ void sound_timer_queue32(u32 channel, u32 value)
 }
 
 
-unsigned sound_timer(fixed8_24 frequency_step, u32 channel)
+NSPIRE_HOT unsigned sound_timer(fixed8_24 frequency_step, u32 channel)
 {
   int ret = 0;
   u32 sample_status = DIRECT_SOUND_INACTIVE;
