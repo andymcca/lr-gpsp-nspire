@@ -328,6 +328,11 @@ Seen (on the calculator):
 * The scene-change crash fixes: a Pokemon Emerald wild encounter with
   video.cc, Partial SMC and a 16 MB ROM buffer, the settings that crashed
   (2026-10-11, build f2218af2 + settings).
+* Fast forward with frameskip off: about 130 game frames a second in
+  Emerald's overworld (2026-10-15, a build that still left pictures out).
+* The new look (2026-10-21, build a25ce9df, the owner playing with it): the
+  owner asked for the loading screen's picture higher (900aecc) and for
+  settings to change only after enter picks them (385b5fd).
 
 PC only (not seen on the calculator yet):
 * The one-pass blended pictures (uploaded 2026-10-10; estimated picture
@@ -338,9 +343,12 @@ PC only (not seen on the calculator yet):
   program file, the ROM manager (how long zipping a 16 MB ROM takes).
 * A game jumping where no code can run stops with a message (the damaged
   Advance Wars): qemu-arm and the PC tests only.
-* The new look (2026-10-20): every screen, state pictures, tab between the
-  settings pages; its costs are the ARM926 model's.
-* Faster saves and loads (2026-10-20): level 1, no flush, one write.
+* The new look's costs (the ARM926 model's), the 2026-10-21 changes to it
+  (uploaded, not yet used).
+* Fast forward's 60 pictures first, and the 2026-10-16 speed work's frame
+  rates (PC estimates, `tests/speed_scenes.sh`).
+* Faster saves and loads (2026-10-20): level 1, no flush, one write; how
+  long the calculator's file system takes (`gpsp_states_time.txt.tns`).
 
 
 History
